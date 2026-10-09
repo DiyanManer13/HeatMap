@@ -51,4 +51,9 @@ heatbudget:
     maximum-latitude: 18.75
     minimum-longitude: 73.65
     maximum-longitude: 74.10
+  simulation:
+    default-seed: 440026
+    rider-count: 300
+    order-count: 2000
+    scenario-start: "2026-05-01T05:30:00Z"
 

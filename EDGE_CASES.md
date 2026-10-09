@@ -36,3 +36,10 @@ This register turns the project brief's edge cases into delivery criteria. It mu
 - Long or delayed offline intervals are recorded as `GAP_RECORDED`; no exposure is silently invented for missing time.
 - Dose grows even for stationary riders because it is time- and heat-based, not distance-based.
 - The current API is an unauthenticated hackathon interface. Rider-scoped authentication must be added before exposure data leaves a controlled demo environment.
+
+## Implemented in Phase 4
+
+- The simulator generates the same 300 riders and 2,000 orders for a supplied seed, so later baseline and HeatBudget dispatch runs are directly comparable.
+- Each order has a restaurant-ready time to represent sun exposure caused by pickup waiting.
+- A deterministic five percent of orders are cancelled and remain visible to dispatch logic rather than being silently treated as deliverable.
+- The virtual clock only advances forward, preventing accidental time-order errors in scenario replay.
