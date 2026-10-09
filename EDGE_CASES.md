@@ -43,3 +43,10 @@ This register turns the project brief's edge cases into delivery criteria. It mu
 - Each order has a restaurant-ready time to represent sun exposure caused by pickup waiting.
 - A deterministic five percent of orders are cancelled and remain visible to dispatch logic rather than being silently treated as deliverable.
 - The virtual clock only advances forward, preventing accidental time-order errors in scenario replay.
+
+## Implemented in Phase 5
+
+- Baseline dispatch selects the nearest rider, while HeatBudget scores a rider by earnings per additional heat point.
+- Heat caps remain soft. If every assignment would exceed the cap, the least-risk rider is assigned and the override is measured rather than blocking income.
+- A rider crossing the warning threshold receives a simulated pause credit and a 15-minute dispatch pause.
+- Both strategies run against the same seed and open-order set. Cancelled orders are excluded consistently from both sides.

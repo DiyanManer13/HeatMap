@@ -56,4 +56,10 @@ heatbudget:
     rider-count: 300
     order-count: 2000
     scenario-start: "2026-05-01T05:30:00Z"
+  dispatch:
+    heat-budget-points: 100
+    warning-ratio: 0.80
+    expected-delivery-minutes: 45
+    heat-pause-duration: 15m
+    pause-credit-share: 0.75
 

@@ -28,6 +28,11 @@ Edge-case requirements are tracked in `EDGE_CASES.md`.
 
 - `GET /api/v1/sim/scenario` returns the default Pune scenario summary.
 - `GET /api/v1/sim/scenario?seed=440026` reproduces exactly the same riders and orders for both dispatch strategies.
+
+## Phase 5: dispatch comparison
+
+- `POST /api/v1/dispatch/compare` runs baseline and HeatBudget strategies over the same seeded scenario.
+- The response includes completed orders, late deliveries, riders over the heat limit, soft-limit overrides, earnings, pause credits, and earnings per heat point.
 =======
 # HeatMap
 >>>>>>> 36c135ffa0cb3aabde29aecc749bee74c56738d5
