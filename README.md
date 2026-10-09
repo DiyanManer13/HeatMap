@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # HeatBudget
 
 Heat-fair dispatch engine for delivery riders in Pune.
@@ -22,3 +23,6 @@ Edge-case requirements are tracked in `EDGE_CASES.md`.
 - `POST /api/v1/riders/shifts` starts a consented anonymous rider shift.
 - `POST /api/v1/riders/{riderId}/location` records an idempotent location ping and updates dose only when data is valid.
 - `GET /api/v1/riders/{riderId}/dose` returns the current dose and non-punitive guidance.
+=======
+# HeatMap
+>>>>>>> 36c135ffa0cb3aabde29aecc749bee74c56738d5
