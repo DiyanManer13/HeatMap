@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: heatbudget
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/heatbudget}
+    username: ${DATABASE_USER:heatbudget}
+    password: ${DATABASE_PASSWORD:change-me-locally}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:change-me-locally}
+  flyway:
+    enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+heatbudget:
+  city: Pune
+  timezone: Asia/Kolkata
+  dose-warning-ratio: 0.80
+  dose-soft-limit-ratio: 1.00
+  standard-budget-points: 100
+  raw-location-retention-hours: 24
+  small-group-suppression-threshold: 10
+  daily-budget-reset-time: "00:00"
+  weather:
+    base-url: ${WEATHER_BASE_URL:https://api.open-meteo.com}
+    latitude: 18.5204
+    longitude: 73.8567
+    cache-minutes: 15
+    maximum-stale-minutes: 60
+    request-timeout: 5s
+  tracking:
+    maximum-speed-kph: 100
+    maximum-continuous-gap-minutes: 15
+    maximum-live-ping-delay: 10m
+    minimum-latitude: 18.35
+    maximum-latitude: 18.75
+    minimum-longitude: 73.65
+    maximum-longitude: 74.10
+

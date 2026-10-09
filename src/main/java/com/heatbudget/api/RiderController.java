@@ -1,0 +1,44 @@
+package com.heatbudget.api;
+
+import com.heatbudget.rider.LocationPingRequest;
+import com.heatbudget.rider.LocationPingResponse;
+import com.heatbudget.rider.RiderDoseResponse;
+import com.heatbudget.rider.RiderTrackingService;
+import com.heatbudget.rider.StartShiftRequest;
+import com.heatbudget.rider.StartShiftResponse;
+import jakarta.validation.Valid;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/v1/riders")
+public class RiderController {
+    private final RiderTrackingService riderTrackingService;
+
+    public RiderController(RiderTrackingService riderTrackingService) {
+        this.riderTrackingService = riderTrackingService;
+    }
+
+    @PostMapping("/shifts")
+    @ResponseStatus(HttpStatus.CREATED)
+    public StartShiftResponse startShift(@Valid @RequestBody StartShiftRequest request) {
+        return riderTrackingService.startShift(request);
+    }
+
+    @PostMapping("/{riderId}/location")
+    public LocationPingResponse recordLocation(@PathVariable UUID riderId, @Valid @RequestBody LocationPingRequest request) {
+        return riderTrackingService.recordLocation(riderId, request);
+    }
+
+    @GetMapping("/{riderId}/dose")
+    public RiderDoseResponse currentDose(@PathVariable UUID riderId) {
+        return riderTrackingService.currentDose(riderId);
+    }
+}
