@@ -62,4 +62,6 @@ heatbudget:
     expected-delivery-minutes: 45
     heat-pause-duration: 15m
     pause-credit-share: 0.75
+  dashboard:
+    allowed-origin: ${DASHBOARD_ALLOWED_ORIGIN:http://localhost:5173}
 

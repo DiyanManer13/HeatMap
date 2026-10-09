@@ -33,6 +33,12 @@ Edge-case requirements are tracked in `EDGE_CASES.md`.
 
 - `POST /api/v1/dispatch/compare` runs baseline and HeatBudget strategies over the same seeded scenario.
 - The response includes completed orders, late deliveries, riders over the heat limit, soft-limit overrides, earnings, pause credits, and earnings per heat point.
+
+## Phase 6: live dashboard contract
+
+- `GET /api/v1/dispatch/events` opens an SSE stream for dashboard updates.
+- Each `POST /api/v1/dispatch/compare` sends a `dispatch-comparison` event with aggregate baseline and HeatBudget metrics.
+- The default permitted dashboard origin is `http://localhost:5173`; set `DASHBOARD_ALLOWED_ORIGIN` for another local frontend.
 =======
 # HeatMap
 >>>>>>> 36c135ffa0cb3aabde29aecc749bee74c56738d5

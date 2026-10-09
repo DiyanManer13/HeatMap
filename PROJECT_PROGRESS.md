@@ -20,7 +20,10 @@ Completed deterministic Pune riders/orders, restaurant wait times, cancellations
 
 Completed baseline nearest-rider dispatch, heat-aware earnings-per-heat scoring, soft heat caps, pause credits, and comparison metrics.
 
+## Phase 6 — live dashboard contract
+
+Completed SSE comparison updates, aggregate dashboard payloads, and restricted local dashboard CORS support.
+
 ## Next phases
 
-1. Add live updates and dashboard API contracts.
-2. Add AWS integrations: Secrets Manager, SNS, Bedrock, and deployment configuration.
+1. Add AWS integrations: Secrets Manager, SNS, Bedrock, and deployment configuration.

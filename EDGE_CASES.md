@@ -50,3 +50,9 @@ This register turns the project brief's edge cases into delivery criteria. It mu
 - Heat caps remain soft. If every assignment would exceed the cap, the least-risk rider is assigned and the override is measured rather than blocking income.
 - A rider crossing the warning threshold receives a simulated pause credit and a 15-minute dispatch pause.
 - Both strategies run against the same seed and open-order set. Cancelled orders are excluded consistently from both sides.
+
+## Implemented in Phase 6
+
+- Dashboard clients can subscribe to server-sent events and receive compact baseline-versus-HeatBudget metrics after every comparison run.
+- CORS accepts only the configured dashboard origin, rather than all websites.
+- Live update payloads contain aggregate metrics only; individual rider location and dose data are not broadcast.
