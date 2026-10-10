@@ -6,3 +6,7 @@ target/
 frontend/dist/
 .env
 frontend/.env
+frontend/dist/
+.env
+frontend/.env
+node_modules/
