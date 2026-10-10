@@ -82,3 +82,35 @@ flowchart TD
     SIM <-->|Authenticates API Key| ALS
     SIM -->|Publishes SDK Command| SNS
     SIM <-->|Fetches Route Coordinates| OSM
+## Hackathon Limitations & Next Steps
+
+- **Security (Frontend SNS)**  
+  The demo uses a tightly scoped, publish‑only IAM user in the Vite frontend. Production will move SNS calls behind an API Gateway + Lambda layer.
+
+- **Mock Data Fallbacks**  
+  If the Spring Boot backend is unavailable, the frontend intercepts calls and serves static mock JSON, guaranteeing demo uptime.
+
+- **Heat Dose Model**  
+  Current simulation uses linear accumulation. Future work will implement a true cumulative dose model with WBGT‑based decay and recovery.
+
+- **Map Tiles**  
+  OpenStreetMap raster tiles are used because `react‑leaflet` does not support AWS Location Service vector tiles.
+
+- **Backend Services Not Yet Integrated**  
+  Redis caching, Caffeine, Secrets Manager, and Bedrock are present in `pom.xml` but not yet wired into the demo flow.
+
+---
+
+## Setup and Run Instructions
+
+### Phase 1 – Start Data Services (Docker)
+
+```bash
+# 1️⃣ Copy env template
+cp .env.example .env   # edit the passwords as needed
+
+# 2️⃣ Spin up PostgreSQL & Redis
+docker compose --env-file .env up -d
+
+# 3️⃣ Launch the Spring Boot API (default port 8080)
+mvn spring-boot:run
