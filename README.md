@@ -19,12 +19,12 @@ Success metric: fewer riders over the heat limit at similar earnings and deliver
 ## Solution Overview
 HeatBudget is a dispatch interceptor that monitors rider heat exposure. When a rider approaches critical limits, the engine reroutes them to shaded zones and calculates a financial "Pause Pay" micro‑incentive to offset lost income.
 
-![Live Comparison Simulation](./assets/comparison.png)
+![Live Comparison Simulation](./assets/comparison.jpg)
 
 ## Key Features
 * **Rider View:** Mobile UI showing live heat dose, route shading, and nearby rest stops.  
-  <br>![Rider UI - Rest & Emergency](./assets/rider-rest.png)  
-  <br>![Rider UI - Pickup](./assets/rider-pickup.png)
+  <br>![Rider UI - Rest & Emergency](./assets/rider-rest.jpg)  
+  <br>![Rider UI - Pickup](./assets/rider-pickup.jpg)
 * **Dispatch Comparison:** A dual‑simulation comparing a baseline dispatch vs. a HeatBudget algorithm‑assisted dispatch.
 * **Pause Pay:** Calculates financial incentives based on time spent in a designated rest geofence.
 * **SOS Alerts:** Manual and automated emergency triggers that push medical alerts to Fleet Managers.
@@ -54,7 +54,7 @@ HeatBudget is a dispatch interceptor that monitors rider heat exposure. When a r
 
 ## Architecture Diagram
 
-![System Architecture](./assets/architecture.png)
+
 
 ```mermaid
 flowchart TD
