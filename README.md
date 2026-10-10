@@ -16,7 +16,6 @@
 - [Key Features](#key-features)
 - [Screenshots](#screenshots)
 - [Technical Architecture and Stack](#technical-architecture-and-stack)
-- [API Specification and Engineering Phases](#api-specification-and-engineering-phases)
 - [Setup and Run](#setup-and-run)
 - [Limitations and Next Steps](#limitations-and-next-steps)
 
@@ -104,23 +103,6 @@ A seeded simulator replays the same day twice, once with baseline nearest-rider 
 - **Caching:** Redis and Caffeine for weather and spatial lookups.
 - **Testing and demo mode:** H2 in-memory database.
 - **Status:** core REST endpoints and schema migrations are initialized in the repository.
-
----
-
-## API Specification and Engineering Phases
-
-The core dispatch engine was developed across 8 backend phases.
-
-| Phase | Name | Details |
-|---|---|---|
-| 1 | Local Foundation | Docker environment and Spring Boot API. Health endpoint: `GET /api/v1/status` |
-| 2 | Heat Core | `GET /api/v1/weather/current` fetches Pune weather via a 15-minute cached Open-Meteo client and returns a clearly labelled WBGT screening estimate. Backed by `WbgtCalculator` and `DoseTracker` |
-| 3 | Rider Tracking API | `POST /api/v1/riders/shifts` starts consented anonymous tracking. `POST /api/v1/riders/{riderId}/location` records idempotent pings. `GET /api/v1/riders/{riderId}/dose` returns current heat dose and non-punitive guidance |
-| 4 | Seeded Simulator | `GET /api/v1/sim/scenario?seed=440026` deterministically reproduces the same riders and orders for testing both dispatch strategies |
-| 5 | Dispatch Comparison | `POST /api/v1/dispatch/compare` runs Baseline vs. Pause Pay logic over the scenario and returns completed orders, late deliveries, soft-limit overrides, and earnings per heat point |
-| 6 | Live Dashboard Contract | `GET /api/v1/dispatch/events` opens an SSE stream for real-time dashboard updates on every dispatch comparison |
-| 7 | AWS Integration | Optional SNS rest nudges, Bedrock compliance reports, and Secrets Manager via AWS SDK for Java v2 |
-| 8 | React Dashboard | Light UI with English/Hindi switching, seeded comparison control, live SSE updates, Rider Safety and Compliance Report screens. `GET /api/v1/dispatch/map?seed=440026&mode=HEAT_AWARE` supplies simulated riders plus cached OpenStreetMap candidates for benches and drinking-water points in Pune |
 
 ---
 
