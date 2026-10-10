@@ -1,15 +1,16 @@
 package com.heatbudget.dispatch;
 
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Test;
 
 import com.heatbudget.config.DispatchProperties;
 import com.heatbudget.config.SimulationProperties;
 import com.heatbudget.sim.SeededScenarioGenerator;
 import com.heatbudget.sim.SimulationScenario;
-import java.math.BigDecimal;
-import java.time.Duration;
-import java.time.Instant;
-import org.junit.jupiter.api.Test;
 
 class DispatchEngineTests {
     private final DispatchProperties properties = new DispatchProperties(100, 0.80, 45, Duration.ofMinutes(15), 0.75);
@@ -33,5 +34,15 @@ class DispatchEngineTests {
         assertThat(heatAware.metrics().completedOrders()).isGreaterThan(0);
         assertThat(heatAware.metrics().deliveryEarnings()).isGreaterThan(BigDecimal.ZERO);
         assertThat(heatAware.metrics().pauseCredits()).isGreaterThanOrEqualTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void heatAwareDispatchDoesNotIncreaseLateDeliveriesForTheDefaultSeed() {
+        SimulationScenario scenario = scenarioGenerator.generate(440026L);
+
+        DispatchComparison comparison = dispatchEngine.compare(scenario);
+
+        assertThat(comparison.heatAware().metrics().lateDeliveries())
+                .isLessThanOrEqualTo(comparison.baseline().metrics().lateDeliveries());
     }
 }

@@ -10,6 +10,8 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:change-me-locally}
+      repositories:
+        enabled: false
   flyway:
     enabled: true
   jpa:
@@ -64,4 +66,10 @@ heatbudget:
     pause-credit-share: 0.75
   dashboard:
     allowed-origin: ${DASHBOARD_ALLOWED_ORIGIN:http://localhost:5173}
+  aws:
+    enabled: ${HEATBUDGET_AWS_ENABLED:false}
+    region: ${AWS_REGION:ap-south-1}
+    sns-topic-arn: ${AWS_SNS_TOPIC_ARN:}
+    bedrock-model-id: ${AWS_BEDROCK_MODEL_ID:}
+    secrets-manager-secret-id: ${AWS_SECRET_ID:}
 

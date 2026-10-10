@@ -1,11 +1,5 @@
 package com.heatbudget.dispatch;
 
-import com.heatbudget.config.DispatchProperties;
-import com.heatbudget.rider.ActivityLevel;
-import com.heatbudget.sim.PuneLocation;
-import com.heatbudget.sim.SimulatedOrder;
-import com.heatbudget.sim.SimulatedOrderStatus;
-import com.heatbudget.sim.SimulationScenario;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
@@ -15,7 +9,15 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
 import org.springframework.stereotype.Service;
+
+import com.heatbudget.config.DispatchProperties;
+import com.heatbudget.rider.ActivityLevel;
+import com.heatbudget.sim.PuneLocation;
+import com.heatbudget.sim.SimulatedOrder;
+import com.heatbudget.sim.SimulatedOrderStatus;
+import com.heatbudget.sim.SimulationScenario;
 
 @Service
 public class DispatchEngine {
@@ -88,9 +90,21 @@ public class DispatchEngine {
         }
         return riderStates.stream()
                 .filter(rider -> predictedDoses.get(rider) <= properties.heatBudgetPoints())
-                .max(Comparator.comparingDouble(rider -> earningsPerAdditionalHeat(order, rider, predictedDoses.get(rider))))
+            .min(Comparator.comparingLong((DispatchRiderState rider) -> projectedLatenessSeconds(order, rider))
+                .thenComparing(Comparator.comparingDouble(
+                    (DispatchRiderState rider) -> earningsPerAdditionalHeat(order, rider, predictedDoses.get(rider)))
+                    .reversed()))
                 .orElseGet(() -> riderStates.stream().min(Comparator.comparingDouble(predictedDoses::get)).orElseThrow());
     }
+
+        private long projectedLatenessSeconds(SimulatedOrder order, DispatchRiderState rider) {
+        double tripKilometres = distanceKilometres(rider.location(), order.pickup())
+            + distanceKilometres(order.pickup(), order.dropoff());
+        Duration tripDuration = Duration.ofSeconds(Math.max(60, Math.round(tripKilometres / SCOOTER_SPEED_KPH * 3600)));
+        Instant projectedCompletion = latest(order.createdAt(), rider.availableAt()).plus(tripDuration);
+        Instant deadline = order.createdAt().plus(Duration.ofMinutes(properties.expectedDeliveryMinutes()));
+        return projectedCompletion.isAfter(deadline) ? Duration.between(deadline, projectedCompletion).toSeconds() : 0;
+        }
 
     private double earningsPerAdditionalHeat(SimulatedOrder order, DispatchRiderState rider, double predictedDose) {
         return order.deliveryFee().doubleValue() / Math.max(0.1, predictedDose - rider.dose());

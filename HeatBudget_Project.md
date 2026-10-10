@@ -1,4 +1,6 @@
-# HeatBudget
+# Pause Pay
+
+**Rest without losing a rupee.**
 
 **A heat-fair dispatch engine for delivery riders**
 Track: Heat and Water | Software only, no hardware | Backend: Spring Boot (Java)
@@ -20,7 +22,7 @@ Every rider gets a **daily heat budget**, like a calorie budget but for heat. Th
 5. **Prove it.** Produce an aggregate compliance report for platforms, unions and regulators.
 
 ### One-line pitch
-> We don't warn riders about heat. We redesign how orders are assigned so riders absorb less heat and still earn the same.
+> Pause Pay helps delivery riders rest without losing a rupee by making dispatch heat-aware.
 
 ---
 
@@ -47,7 +49,7 @@ Every rider gets a **daily heat budget**, like a calorie budget but for heat. Th
 6. **Compliance report.** Daily aggregate: exposure distribution, breaches, pause credits paid, earnings impact.
 
 ### Key metric
-**Earnings per unit of heat**, compared between baseline dispatch (nearest rider) and HeatBudget dispatch.
+**Earnings per unit of heat**, compared between baseline dispatch (nearest rider) and Pause Pay dispatch.
 
 ---
 
@@ -92,12 +94,12 @@ heatbudget/
 - `GET /riders/{id}/dose` returns the rider's own dose and guidance
 - `POST /dispatch/run` runs one dispatch cycle
 - `GET /reports/daily` returns the aggregate compliance report
-- `GET /sim/compare` runs baseline vs HeatBudget on the same seeded day
+- `GET /sim/compare` runs baseline vs Pause Pay on the same seeded day
 
 ### Build cautions
 - **GraphHopper setup takes time** (OSM import, custom model). Fallback: straight-line distance with a shade penalty per grid cell, and present GraphHopper as the next step.
 - **Timefold has a learning curve.** Build the greedy dispatcher first so a demo always works.
-- **Use the same seed for both engines** so baseline and HeatBudget see identical orders, otherwise the comparison isn't fair.
+- **Use the same seed for both engines** so baseline and Pause Pay see identical orders, otherwise the comparison isn't fair.
 - **Keep the heat model simple and cited.** Don't let it become a time sink.
 
 ---
@@ -249,7 +251,7 @@ Items marked ⭐ are the ones judges are most likely to ask about.
 ## 8. Demo plan
 
 1. Live map of one city on a 44°C day with 300 riders.
-2. Left: normal dispatch (nearest rider). Right: HeatBudget.
+2. Left: normal dispatch (nearest rider). Right: Pause Pay.
 3. Counters for riders over the heat limit, average earnings, and late-delivery rate on both sides.
 4. Expected result: far fewer riders over the limit, earnings steady, delivery time almost unchanged, and a small pause-credit cost.
 5. Generate the compliance report in one click.

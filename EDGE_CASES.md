@@ -56,3 +56,10 @@ This register turns the project brief's edge cases into delivery criteria. It mu
 - Dashboard clients can subscribe to server-sent events and receive compact baseline-versus-HeatBudget metrics after every comparison run.
 - CORS accepts only the configured dashboard origin, rather than all websites.
 - Live update payloads contain aggregate metrics only; individual rider location and dose data are not broadcast.
+
+## Implemented in Phase 7
+
+- AWS is opt-in. Local runs use deterministic fallback notification and report services without AWS credentials.
+- AWS clients use the standard credential provider chain so deployed workloads can use IAM roles instead of stored access keys.
+- SNS sends only the requested rest-nudge content; report generation sends aggregate comparison data to Bedrock, never raw rider locations.
+- Secrets Manager access is explicit and on-demand; no secret values are logged or committed.
