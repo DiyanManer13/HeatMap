@@ -1,6 +1,6 @@
 import { AlertTriangle, Pause, Play, RefreshCw, ShieldCheck, ThermometerSun, Wallet } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
-import { CircleMarker, MapContainer, Polyline, TileLayer, Marker } from "react-leaflet";
+import { CircleMarker, MapContainer, Polyline, TileLayer, Marker, Circle } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./LiveComparison.css";
@@ -62,10 +62,11 @@ const END: [number,number]   = [18.505, 73.855];
 
 // ─── Individual Map Component ─────────────────────────────────────────────
 const SingleSimMap = ({
-  mode, time, dose, isResting, routes
+  mode, time, dose, isResting, routes, awsStatus
 }: {
   mode: "BASELINE"|"HEATBUDGET"; time: number; dose: number; isResting: boolean;
   routes: { base: [number,number][], leg1: [number,number][], leg2: [number,number][] };
+  awsStatus?: "connecting" | "connected" | "error";
 }) => {
   const isB = mode === "BASELINE";
   
@@ -107,6 +108,23 @@ const SingleSimMap = ({
       </header>
 
       <div style={{ position: "relative", height: "100%" }}>
+        {!isB && (
+          <div className="aws-badge">
+            <span style={{
+              display:"inline-block", width:8, height:8, borderRadius:"50%",
+              background: awsStatus === "connected" ? "#16805f" : awsStatus === "error" ? "#cf5543" : "#ff9900",
+              boxShadow: awsStatus === "connected" ? "0 0 6px #16805f" : "none"
+            }} />
+            <span style={{color: "#ff9900"}}>AWS</span> Location Service
+          </div>
+        )}
+        
+        {isB && dose >= 100 && (
+          <div className="sns-alert-badge">
+            🚨 AWS SNS: Fleet Manager Alerted
+          </div>
+        )}
+
         <MapContainer center={[18.515, 73.855]} zoom={14} className="sim-map" scrollWheelZoom={false} attributionControl={false} dragging={false} doubleClickZoom={false} zoomControl={false}>
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           
@@ -116,8 +134,13 @@ const SingleSimMap = ({
           {/* Path driven so far */}
           {drawnPath.length > 0 && <Polyline positions={drawnPath} pathOptions={{ color: isB ? "#8897a3" : (dose > 80 ? "#cf5543" : "#16805f"), weight: 5 }} />}
 
-          {/* Rest stop (Only show for HeatBudget) */}
-          {!isB && <Marker position={REST} icon={restIcon} />}
+          {/* Rest stop & AWS Geofence (Only show for HeatBudget) */}
+          {!isB && (
+            <>
+              <Circle center={REST} radius={180} pathOptions={{ color: '#232f3e', fillColor: '#ff9900', fillOpacity: 0.1, weight: 2, dashArray: "4 4" }} />
+              <Marker position={REST} icon={restIcon} />
+            </>
+          )}
 
           {/* Rider */}
           <CircleMarker center={pos} radius={isResting ? 0 : 8} pathOptions={{ color: "#fff", fillColor: doseColor(dose), fillOpacity: 1, weight: 2 }} />
@@ -145,7 +168,9 @@ export const LiveComparison = () => {
     base: [START, END], leg1: [START, REST], leg2: [REST, END]
   });
 
-  // Fetch true OSRM road routes on mount
+  const [awsStatus, setAwsStatus] = useState<"connecting" | "connected" | "error">("connecting");
+
+  // Fetch true OSRM road routes and Ping AWS on mount
   useEffect(() => {
     Promise.all([
       fetchRoadRoute(START, END),
@@ -154,6 +179,21 @@ export const LiveComparison = () => {
     ]).then(([base, leg1, leg2]) => {
       setRoutes({ base, leg1, leg2 });
     });
+
+    // Authenticated AWS Ping (Fetches style descriptor to verify API key)
+    const apiKey = import.meta.env.VITE_AWS_LOCATION_KEY;
+    if (!apiKey) {
+      console.warn("Missing VITE_AWS_LOCATION_KEY in .env file");
+      setAwsStatus("error");
+      return;
+    }
+    const awsUrl = `https://maps.geo.ap-south-1.amazonaws.com/maps/v0/maps/HeatBudgetMap/style-descriptor?key=${apiKey}`;
+    fetch(awsUrl)
+      .then(res => {
+        if (res.ok) setAwsStatus("connected");
+        else setAwsStatus("error");
+      })
+      .catch(() => setAwsStatus("error"));
   }, []);
 
   // Clock loop
@@ -203,10 +243,12 @@ export const LiveComparison = () => {
   if (time > 50)  events.unshift({ msg: "Both riders start their shift.", type: "neutral" });
   if (time > 200) events.unshift({ msg: "Order 1 completed. Heat increasing.", type: "neutral" });
   if (time > 400) events.unshift({ msg: "Baseline rider approaching dangerous heat levels.", type: "danger" });
+  if (time > 440) events.unshift({ msg: "AWS Location Service: Rider entered Rest Zone Geofence.", type: "aws" });
   if (time > 450) events.unshift({ msg: "HeatBudget AI intercepts! Rider diverted to rest point for 20 mins.", type: "safe" });
   if (time > 500) events.unshift({ msg: "HeatBudget rider earning ₹40 Pause Pay while resting in shade.", type: "safe" });
   if (time > 650) events.unshift({ msg: "HeatBudget rider fully recovered. Resuming deliveries.", type: "safe" });
   if (time > 850) events.unshift({ msg: "Baseline rider hits 100% critical heat dose. Medical risk high.", type: "danger" });
+  if (time > 860) events.unshift({ msg: "AWS SNS Triggered: High-priority medical alert sent to Fleet Manager.", type: "aws" });
   if (time >= 990) events.unshift({ msg: "Shift ended.", type: "neutral" });
 
   return (
@@ -263,7 +305,7 @@ export const LiveComparison = () => {
 
       <div className="dual-map" style={{ gridTemplateColumns: "1fr 1fr", height: "400px", marginBottom: "20px" }}>
         <SingleSimMap mode="BASELINE" time={time} dose={bDose} isResting={false} routes={routes} />
-        <SingleSimMap mode="HEATBUDGET" time={time} dose={hDose} isResting={isResting} routes={routes} />
+        <SingleSimMap mode="HEATBUDGET" time={time} dose={hDose} isResting={isResting} routes={routes} awsStatus={awsStatus} />
       </div>
 
       <div className="live-bottom">
@@ -301,8 +343,8 @@ export const LiveComparison = () => {
         <aside className="event-feed">
           <p className="eyebrow">STORY LOG</p>
           {events.length > 0 ? events.map((ev, i) => (
-            <p key={i} className={ev.type === "danger" ? "event-danger" : ev.type === "safe" ? "event-ok" : ""}>
-              <i style={{ background: ev.type === "danger" ? "#cf5543" : ev.type === "safe" ? "#16805f" : "#bbb" }}/>
+            <p key={i} className={`event-${ev.type}`}>
+              <i style={{ background: ev.type === "danger" ? "#cf5543" : ev.type === "safe" ? "#16805f" : ev.type === "aws" ? "#ff9900" : "#bbb" }}/>
               {ev.msg}
             </p>
           )) : <p className="event-idle">Press Play Sim to begin the story.</p>}

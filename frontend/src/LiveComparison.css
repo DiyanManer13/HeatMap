@@ -90,8 +90,58 @@
 .event-feed p { display:flex; gap:8px; font-size:12px; line-height:1.45; margin-bottom:10px; color:#445260; }
 .event-feed i { flex:0 0 auto; width:7px; height:7px; border-radius:50%; margin-top:4px; }
 .event-danger i { background:#cf5543; }
-.event-ok i { background:#16805f; }
+.event-safe i { background:#16805f; }
+.event-aws { color: #232f3e; font-weight: 500; }
+.event-aws i { background: #ff9900; }
 .event-idle { color:#aaa; font-style:italic; }
+
+/* ── AWS Location Service Badge ── */
+.aws-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1000;
+  background: rgba(255,255,255,0.95);
+  border: 1px solid #e0e0e0;
+  border-left: 3px solid #ff9900;
+  color: #232f3e;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── AWS SNS Emergency Badge ── */
+.sns-alert-badge {
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: #cf5543;
+  color: #fff;
+  border: 1px solid #a33b2d;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(207,85,67,0.4);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  animation: pulse-red 1.5s infinite;
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(207,85,67,0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(207,85,67,0); }
+  100% { box-shadow: 0 0 0 0 rgba(207,85,67,0); }
+}
+
 .error { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:12px 14px; color:#8e3e2c; background:#fff0ec; border-radius:10px; font-size:14px; }
 .map-loading { display:grid; place-content:center; min-height:300px; color:#5f786e; font-size:15px; }
 
