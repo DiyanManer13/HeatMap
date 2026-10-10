@@ -1,5 +1,6 @@
 import { AlertTriangle, Pause, Play, RefreshCw, ShieldCheck, ThermometerSun, Wallet } from "lucide-react";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
+import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 import { CircleMarker, MapContainer, Polyline, TileLayer, Marker, Circle } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -204,6 +205,46 @@ export const LiveComparison = () => {
     }, 60);
     return () => clearInterval(id);
   }, [playing]);
+
+  const hasFiredSns = useRef(false);
+
+  // Reset SNS lock when sim resets
+  useEffect(() => {
+    if (time === 0) hasFiredSns.current = false;
+  }, [time]);
+
+  // The REAL AWS SNS Trigger
+  useEffect(() => {
+    if (time >= 860 && !hasFiredSns.current) {
+      hasFiredSns.current = true;
+      
+      const fireRealAwsAlert = async () => {
+        try {
+          const snsClient = new SNSClient({
+            region: import.meta.env.VITE_AWS_REGION,
+            credentials: {
+              accessKeyId: import.meta.env.VITE_AWS_ACCESS_KEY_ID,
+              secretAccessKey: import.meta.env.VITE_AWS_SECRET_ACCESS_KEY,
+            }
+          });
+          
+          const command = new PublishCommand({
+            // Base Topic ARN (stripping the subscription ID if provided by mistake)
+            TopicArn: "arn:aws:sns:ap-south-1:629234874999:HeatBudgetAlerts",
+            Subject: "🚨 URGENT: HeatBudget Medical Alert",
+            Message: "CRITICAL ALERT:\n\nA rider on the Baseline dispatch route has reached a 100% heat exposure dose.\n\nImmediate medical risk detected. Please dispatch support to their current GPS location immediately.\n\n- AWS Location Service & HeatBudget AI",
+          });
+          
+          const result = await snsClient.send(command);
+          console.log("SUCCESS: AWS Accepted it! MessageId:", result.MessageId);
+        } catch (error) {
+          console.error("Failed to send real AWS SNS Alert:", error);
+        }
+      };
+
+      fireRealAwsAlert();
+    }
+  }, [time]);
 
   const hasStarted = time > 0;
 

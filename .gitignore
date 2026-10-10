@@ -3,3 +3,6 @@ target/
 .idea/
 *.iml
 
+frontend/dist/
+.env
+frontend/.env

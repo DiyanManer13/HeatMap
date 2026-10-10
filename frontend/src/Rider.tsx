@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 import type { RiderLanguage } from "./i18n";
 import { riderText } from "./i18n";
 import type { IScannerControls } from "@zxing/browser";
@@ -205,10 +206,40 @@ export const Rider = ({
   const [scanMessage, setScanMessage] = useState("");
   const [scannedHubId, setScannedHubId] = useState<string | null>(null);
   const [mapLayout, setMapLayout] = useState("initial");
+  const [isSendingSos, setIsSendingSos] = useState(false);
+  
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const scanCompletedRef = useRef(false);
+
+  // AWS SNS Emergency Trigger
+  const fireEmergencyEmail = async () => {
+    setIsSendingSos(true);
+    showToast("Triggering AWS Emergency Protocol...");
+    try {
+      const snsClient = new SNSClient({
+        region: import.meta.env.VITE_AWS_REGION,
+        credentials: {
+          accessKeyId: import.meta.env.VITE_AWS_ACCESS_KEY_ID,
+          secretAccessKey: import.meta.env.VITE_AWS_SECRET_ACCESS_KEY,
+        }
+      });
+      
+      const command = new PublishCommand({
+        TopicArn: "arn:aws:sns:ap-south-1:629234874999:HeatBudgetAlerts",
+        Subject: "🚨 SOS: Rider Emergency Triggered",
+        Message: `CRITICAL ALERT:\n\nRider ${riderId} has manually triggered the SOS Emergency button from their HeatBudget app.\n\nImmediate medical or safety support required. Please dispatch fleet support to their current GPS location immediately.\n\n- AWS Location Service & HeatBudget App`,
+      });
+      
+      await snsClient.send(command);
+      showToast("Emergency alert sent to Fleet Manager!");
+    } catch (error) {
+      console.error("Failed to send AWS SNS SOS:", error);
+      showToast("Error: Could not send AWS Alert.");
+    }
+    setIsSendingSos(false);
+  };
 
   // real road polylines fetched from OSRM
   const [pickupRoad,  setPickupRoad]  = useState<[number,number][]>([]);
@@ -636,8 +667,9 @@ export const Rider = ({
 
         <div className="rider-safety-actions">
           {status === "ACTIVE" && <button className="request-rest-btn" onClick={startRest}><Coffee size={16} /> {t.requestBreak}</button>}
-          <button className="emergency-btn" onClick={() => showToast(t.emergencyAlert)}>
-            <Siren size={17} /> {t.emergency}
+          <button className="emergency-btn" onClick={fireEmergencyEmail} disabled={isSendingSos}>
+            {isSendingSos ? <Loader2 size={17} className="spin" /> : <Siren size={17} />}
+            {isSendingSos ? "Sending SOS..." : t.emergency}
           </button>
         </div>
       </div>

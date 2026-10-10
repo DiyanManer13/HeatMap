@@ -186,7 +186,7 @@ export const App = () => {
         </section>
       )}
       {page === "compare" && (
-        <LiveComparison language={language} setPage={navigateTo} setSelectedRiderId={setSelectedRiderId} />
+        <LiveComparison />
       )}
       {page === "reports" && <Reports />}
     </main>
