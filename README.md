@@ -1,6 +1,6 @@
 # HeatBudget
 Algorithm-Driven Heat Protection & "Pause Pay" for Delivery Fleets
-
+https://staging.d1z0m6o05f18wd.amplifyapp.com/#rider
 ## Problem Statement
 Delivery riders in Indian cities work 10-12 hours outdoors, even at 44°C+, and are paid per delivery, so every minute of rest is unpaid. Platforms reward afternoon availability and penalize cancellations, which makes breaks costly. 
 
