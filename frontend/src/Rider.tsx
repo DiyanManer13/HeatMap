@@ -4,6 +4,9 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import type { RiderLanguage } from "./i18n";
+import { riderText } from "./i18n";
+import type { IScannerControls } from "@zxing/browser";
 import L from "leaflet";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -30,6 +33,23 @@ const interpolateRoute = (pts: [number,number][], t: number): [number,number] =>
   const seg = t * (pts.length - 1);
   const i   = Math.floor(seg);
   return lerpPt(pts[i], pts[Math.min(i + 1, pts.length - 1)], seg - i);
+};
+
+const hubCodeFor = (name: string) => name.toLowerCase()
+  .normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-|-$/g, "");
+
+const parseRestHubQr = (payload: string): string | null => {
+  try {
+    const url = new URL(payload);
+    if (url.protocol !== "pausepay:" || url.hostname !== "hub") return null;
+    const hubId = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(hubId) ? hubId : null;
+  } catch {
+    return null;
+  }
 };
 
 // OSRM public router — real road geometry, no API key needed
@@ -112,17 +132,19 @@ const SmoothCamera = ({ center }: { center: [number,number] }) => {
 // ─── sub-components ──────────────────────────────────────────────────────────
 const PlaceMarker = ({
   place,
+  language,
 }: {
   place: { id: number; type: string; lat: number; lng: number; name: string; time: string; credit: number };
+  language: RiderLanguage;
 }) => (
   <Marker position={[place.lat, place.lng]} icon={placeIcon(place.type)}>
     <Popup closeButton={false}>
       <div style={{ minWidth: 150, fontFamily: "DM Sans, sans-serif", padding: 4 }}>
         <strong style={{ fontSize: 15 }}>{place.name}</strong>
-        <p style={{ margin: "4px 0 2px", color: "#555", fontSize: 13 }}>🚶 {place.time} walk</p>
+        <p style={{ margin: "4px 0 2px", color: "#555", fontSize: 13 }}>🚶 {place.time} {riderText[language].walk}</p>
         {place.credit > 0 && (
           <p style={{ margin: 0, color: "#16805f", fontWeight: 700, fontSize: 13 }}>
-            Pause credit: ₹{place.credit}
+            {riderText[language].pauseCredit}: ₹{place.credit}
           </p>
         )}
       </div>
@@ -137,9 +159,10 @@ export const Rider = ({
   setLanguage,
 }: {
   riderId: string;
-  language: string;
-  setLanguage: (l: string) => void;
+  language: RiderLanguage;
+  setLanguage: (l: RiderLanguage) => void;
 }) => {
+  const t = riderText[language];
   const [dose, setDose]           = useState(38);
   const [earnings, setEarnings]   = useState(450);
   const [status, setStatus]       = useState<"ACTIVE" | "RESTING" | "OFFLINE">("ACTIVE");
@@ -151,6 +174,11 @@ export const Rider = ({
   const [routeLoading, setRouteLoading] = useState(false);
   const [restCheckedIn, setRestCheckedIn] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
+  const [scanMessage, setScanMessage] = useState("");
+  const [scannedHubId, setScannedHubId] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const scannerControlsRef = useRef<IScannerControls | null>(null);
+  const scanCompletedRef = useRef(false);
 
   // real road polylines fetched from OSRM
   const [pickupRoad,  setPickupRoad]  = useState<[number,number][]>([]);
@@ -185,6 +213,7 @@ export const Rider = ({
       restPlace:      rPlace,
     };
   }, [idHash, orderSeed, baseLat, baseLng]);
+  const expectedHubId = useMemo(() => hubCodeFor(restPlace), [restPlace]);
 
   // rest + helper place markers
   const places = useMemo(() => {
@@ -273,16 +302,91 @@ export const Rider = ({
     dose >= 50 ? "#d99543" :
                  "#16805f";
 
-  const acceptOrder = () => { setTask("PICKUP"); setProgress(0); showToast(`Heading to ${restaurantName}`); };
-  const arrivedPickup = () => { setTask("DROPOFF"); setProgress(0); showToast("Order picked up! Riding to customer."); };
+  const acceptOrder = () => { setTask("PICKUP"); setProgress(0); showToast(`${t.headingTo} ${restaurantName}`); };
+  const arrivedPickup = () => { setTask("DROPOFF"); setProgress(0); showToast(t.pickedUp); };
   const completeDelivery = () => {
     setTask("IDLE"); setProgress(0);
     setEarnings(e => e + 45);
     setOrderSeed(s => s + 1);
-    showToast("₹45 earned! Looking for next order…");
+    showToast(`₹45 ${t.earned}`);
   };
-  const startRest = () => { setStatus("RESTING"); setTask("IDLE"); setProgress(0); setRestCheckedIn(false); showToast(`Rest plan shared: ${restPlace}`); };
-  const checkInAtRest = () => { setRestCheckedIn(true); setRestTimer(300); setShowQrScanner(false); showToast("Check-in verified. Your paid cooling break has started."); };
+  const startRest = () => { setStatus("RESTING"); setTask("IDLE"); setProgress(0); setRestCheckedIn(false); showToast(`${t.restShared}: ${restPlace}`); };
+  const checkInAtRest = useCallback((hubId: string) => {
+    setScannedHubId(hubId);
+    setRestCheckedIn(true);
+    setRestTimer(300);
+    setShowQrScanner(false);
+    showToast(t.demoCheckin);
+  }, [showToast, t]);
+
+  const openQrScanner = () => {
+    scanCompletedRef.current = false;
+    setScannedHubId(null);
+    setScanMessage(t.cameraStarting);
+    setShowQrScanner(true);
+  };
+
+  useEffect(() => {
+    if (!showQrScanner) return;
+    let cancelled = false;
+    let controls: IScannerControls | null = null;
+    scanCompletedRef.current = false;
+    const video = videoRef.current;
+    if (!video) {
+      setScanMessage(t.cameraUnavailable);
+      return;
+    }
+
+    const startCameraScanner = async () => {
+      try {
+        if (navigator.permissions?.query) {
+          const cameraPermission = await navigator.permissions.query({ name: "camera" as PermissionName });
+          if (cameraPermission.state === "denied") {
+            setScanMessage(t.cameraUnavailable);
+            return;
+          }
+        }
+        const { BrowserQRCodeReader } = await import("@zxing/browser");
+        if (cancelled) return;
+        const startedControls = await new BrowserQRCodeReader().decodeFromConstraints(
+          { audio: false, video: { facingMode: { ideal: "environment" } } },
+          video,
+          (result, _error, activeControls) => {
+            controls = activeControls;
+            scannerControlsRef.current = activeControls;
+            if (cancelled || !result || scanCompletedRef.current) return;
+            const scannedId = parseRestHubQr(result.getText());
+            if (!scannedId) {
+              setScanMessage(t.qrInvalid);
+              return;
+            }
+            if (scannedId !== expectedHubId) {
+              setScanMessage(`${t.qrWrongHub} ${t.expectedCode}: pausepay://hub/${expectedHubId}`);
+              return;
+            }
+
+            scanCompletedRef.current = true;
+            activeControls.stop();
+            checkInAtRest(scannedId);
+          },
+        );
+        controls = startedControls;
+        scannerControlsRef.current = startedControls;
+        if (cancelled) startedControls.stop();
+        else setScanMessage(t.cameraScanning);
+      } catch {
+        if (!cancelled) setScanMessage(t.cameraUnavailable);
+      }
+    };
+    void startCameraScanner();
+
+    return () => {
+      cancelled = true;
+      controls?.stop();
+      scannerControlsRef.current?.stop();
+      scannerControlsRef.current = null;
+    };
+  }, [showQrScanner, expectedHubId, checkInAtRest, t]);
 
   const routeColor =
     task === "PICKUP"  ? "#1a73e8" :
@@ -298,18 +402,18 @@ export const Rider = ({
       {toast && <div className="app-toast" key={toast}>{toast}</div>}
 
       {showQrScanner && (
-        <div className="qr-scanner" role="dialog" aria-modal="true" aria-label="Rest hub QR scanner">
-          <div className="scanner-top"><button onClick={() => setShowQrScanner(false)} aria-label="Close scanner"><X size={20}/></button><strong>Scan rest-hub QR</strong><span/></div>
+        <div className="qr-scanner" role="dialog" aria-modal="true" aria-label={t.scanDialog}>
+            <div className="scanner-top"><button onClick={() => setShowQrScanner(false)} aria-label={t.closeScanner}><X size={20}/></button><strong>{t.scanHub}</strong><span/></div>
           <div className="scanner-view">
-            <div className="scan-frame"><i/><i/><i/><i/><ScanLine size={34}/></div>
-            <p>Point your camera at the QR plaque at <strong>{restPlace}</strong>.</p>
+            <div className="scan-frame">
+              <video ref={videoRef} className="scanner-video" autoPlay muted playsInline />
+              <div className="scan-target"><i/><i/><i/><i/><ScanLine size={34}/></div>
+            </div>
+            <p role="status" aria-live="polite">{scanMessage}</p>
+            <p className="expected-qr">{t.expectedCode}: <code>pausepay://hub/{expectedHubId}</code></p>
+            <p className="scanner-local-note">{t.serverNotVerified}</p>
           </div>
-          <div className="demo-qr-card">
-            <div className="demo-qr" aria-label="Demo rest hub QR code"><b/><b/><b/><b/><b/><b/><b/><b/><b/></div>
-            <div><strong>Judge demo QR</strong><span>This represents the QR plaque at the partner hub.</span></div>
-            <button onClick={checkInAtRest}><CheckCircle2 size={16}/> Verify</button>
           </div>
-        </div>
       )}
 
       {/* ── full-bleed map ── */}
@@ -317,8 +421,9 @@ export const Rider = ({
         <MapContainer
           key={`${baseLat.toFixed(5)}-${baseLng.toFixed(5)}`}
           center={riderPos}
-          zoom={16}
-          zoomControl={false}
+          zoom={14}
+          zoomControl
+          scrollWheelZoom
           className="rider-map"
           attributionControl={false}
         >
@@ -342,7 +447,7 @@ export const Rider = ({
           )}
 
           {/* helper place markers */}
-          {places.map(p => <PlaceMarker key={p.id} place={p} />)}
+          {places.map(p => <PlaceMarker key={p.id} place={p} language={language} />)}
 
           {/* rider */}
           <Marker position={riderPos} icon={riderIcon(doseColor)} zIndexOffset={1000} />
@@ -351,7 +456,7 @@ export const Rider = ({
         {/* loading badge */}
         {routeLoading && (
           <div className="route-loading-badge">
-            <Loader2 size={14} className="spin-icon" /> Fetching road…
+            <Loader2 size={14} className="spin-icon" /> {t.fetchingRoad}
           </div>
         )}
       </div>
@@ -360,10 +465,10 @@ export const Rider = ({
       <header className="rider-header">
         <div className="rider-top">
           <label className="language-switch">
-            <select value={language} onChange={e => setLanguage(e.target.value)}>
+            <select value={language} onChange={e => setLanguage(e.target.value as RiderLanguage)}>
               <option value="en">EN</option>
-              <option value="hi">HI</option>
-              <option value="mr">MR</option>
+              <option value="hi">हिंदी</option>
+              <option value="mr">मराठी</option>
             </select>
           </label>
           <div className="earnings-pill"><Wallet size={15} /> ₹{earnings}</div>
@@ -375,7 +480,7 @@ export const Rider = ({
           >
             <strong>{Math.round(dose)}%</strong>
           </div>
-          <p>Heat Dose</p>
+          <p>{t.heatDose}</p>
         </div>
       </header>
 
@@ -385,86 +490,86 @@ export const Rider = ({
 
         {status === "OFFLINE" ? (
           <div className="card-state">
-            <h3>Offline</h3>
-            <p><MapPin size={15} /> Last location saved. Reconnecting…</p>
-            <button className="btn-primary" onClick={() => setStatus("ACTIVE")}>Go Online</button>
+            <h3>{t.offline}</h3>
+            <p><MapPin size={15} /> {t.lastLocation}</p>
+            <button className="btn-primary" onClick={() => setStatus("ACTIVE")}>{t.goOnline}</button>
           </div>
 
         ) : status === "RESTING" ? (
           <div className="card-state">
-            <h3>Resting at {restPlace}</h3>
+            <h3>{t.restingAt} {restPlace}</h3>
             {restCheckedIn ? <>
-              <p><Droplets size={15} /> QR check-in verified · Dose cooling down · {Math.floor(restTimer / 60)}:{String(restTimer % 60).padStart(2, "0")} left</p>
+              <p><Droplets size={15} /> {t.checkinVerified} · {scannedHubId} · {Math.floor(restTimer / 60)}:{String(restTimer % 60).padStart(2, "0")} {t.left}</p>
               <div className="progress-bar"><div style={{ width: `${Math.max(0, (300 - restTimer) / 300 * 100)}%`, background: doseColor }} /></div>
-              <button className="btn-secondary" style={{ marginTop: 12 }} onClick={() => { setStatus("ACTIVE"); setRestTimer(300); }}>Resume Work</button>
+              <button className="btn-secondary" style={{ marginTop: 12 }} onClick={() => { setStatus("ACTIVE"); setRestTimer(300); }}>{t.goOnline}</button>
             </> : <>
-              <p><MapPin size={15} /> Follow the amber route to <strong>{restPlace}</strong>. A QR plaque is displayed at its counter/entrance.</p>
-              <button className="btn-primary nav-btn" onClick={() => setShowQrScanner(true)}><QrCode size={17} /> I’m at the hub · Scan QR</button>
-              <button className="btn-secondary" style={{ marginTop: 10 }} onClick={() => setStatus("ACTIVE")}>I cannot reach this hub</button>
+              <p><MapPin size={15} /> {t.followRoute} <strong>{restPlace}</strong>. {t.qrAtHub}</p>
+              <button className="btn-primary nav-btn" onClick={openQrScanner}><QrCode size={17} /> {t.atHub}</button>
+              <button className="btn-secondary" style={{ marginTop: 10 }} onClick={() => setStatus("ACTIVE")}>{t.cannotReach}</button>
             </>}
           </div>
 
         ) : task === "PICKUP" ? (
           <div className="card-state">
-            <div className="task-pill blue"><Zap size={13} /> On the way to pickup</div>
+            <div className="task-pill blue"><Zap size={13} /> {t.onWayPickup}</div>
             <h3>{restaurantName}</h3>
-            <p><Navigation size={15} /> {pickupETA} min away</p>
+            <p><Navigation size={15} /> {pickupETA} {t.away}</p>
             <div className="progress-bar"><div style={{ width: `${progress * 100}%`, background: "#1a73e8" }} /></div>
             <button className="btn-primary blue-btn" style={{ marginTop: 14 }} onClick={arrivedPickup}>
-              Arrived at Restaurant
+              {t.arrivedRestaurant}
             </button>
           </div>
 
         ) : task === "DROPOFF" ? (
           <div className="card-state">
-            <div className="task-pill amber"><Bike size={13} /> Delivering to customer</div>
-            <h3>Order #{orderNum}</h3>
-            <p><Navigation size={15} /> {dropoffETA} min away</p>
+            <div className="task-pill amber"><Bike size={13} /> {t.delivering}</div>
+            <h3>{t.order} #{orderNum}</h3>
+            <p><Navigation size={15} /> {dropoffETA} {t.away}</p>
             <div className="progress-bar"><div style={{ width: `${progress * 100}%`, background: "#f59e0b" }} /></div>
             <button className="btn-primary amber-btn" style={{ marginTop: 14 }} onClick={completeDelivery}>
-              <CheckCircle2 size={18} /> Mark Delivered
+              <CheckCircle2 size={18} /> {t.markDelivered}
             </button>
           </div>
 
         ) : dose < 50 ? (
           <div className="card-state">
-            <div className="task-pill green"><Zap size={13} /> New order</div>
-            <h3>Order #{orderNum}</h3>
-            <p><MapPin size={15} /> Pickup: {restaurantName} · 1.2 km</p>
-            <button className="btn-primary accept-btn" onClick={acceptOrder}>Accept (₹45)</button>
+            <div className="task-pill green"><Zap size={13} /> {t.newOrder}</div>
+            <h3>{t.order} #{orderNum}</h3>
+            <p><MapPin size={15} /> {t.pickup}: {restaurantName} · 1.2 km</p>
+            <button className="btn-primary accept-btn" onClick={acceptOrder}>{t.accept} (₹45)</button>
           </div>
 
         ) : dose < 80 ? (
           <div className="card-state">
-            <div className="task-pill amber"><Trees size={13} /> Shaded route assigned</div>
-            <h3>Order #{orderNum}</h3>
-            <p><MapPin size={15} /> Pickup: {restaurantName} · shaded path</p>
-            <button className="btn-primary accept-btn" onClick={acceptOrder}>Accept (₹45)</button>
+            <div className="task-pill amber"><Trees size={13} /> {t.shadedRoute}</div>
+            <h3>{t.order} #{orderNum}</h3>
+            <p><MapPin size={15} /> {t.pickup}: {restaurantName} · {t.shadedRoute}</p>
+            <button className="btn-primary accept-btn" onClick={acceptOrder}>{t.accept} (₹45)</button>
           </div>
 
         ) : dose <= 100 ? (
           <div className="card-state">
-            <div className="task-pill red"><Droplets size={13} /> Heat limit reached</div>
-            <h3>Time for a break</h3>
-            <p><Coffee size={15} /> {restPlace} · Pause credit ₹20</p>
-            <button className="btn-primary nav-btn" onClick={startRest}><Navigation size={17} /> Navigate to Rest Point</button>
-            <button className="btn-secondary" onClick={acceptOrder}>Skip break, take order</button>
+            <div className="task-pill red"><Droplets size={13} /> {t.heatLimitReached}</div>
+            <h3>{t.breakTime}</h3>
+            <p><Coffee size={15} /> {restPlace} · {t.pauseCredit} ₹20</p>
+            <button className="btn-primary nav-btn" onClick={startRest}><Navigation size={17} /> {t.navigateRest}</button>
+            <button className="btn-secondary" onClick={acceptOrder}>{t.skipBreak}</button>
           </div>
 
         ) : (
           <div className="card-state">
-            <div className="task-pill dark"><Siren size={13} /> Critical level</div>
-            <h3>Stop now</h3>
-            <p><Siren size={15} /> Your body is at serious risk. Rest immediately.</p>
-            <button className="btn-primary critical-btn" onClick={startRest}><Droplets size={17} /> Force Break</button>
-            <button className="btn-text warning-text" onClick={acceptOrder}>Ignore (High Risk)</button>
+            <div className="task-pill dark"><Siren size={13} /> {t.critical}</div>
+            <h3>{t.stopNow}</h3>
+            <p><Siren size={15} /> {t.seriousRisk}</p>
+            <button className="btn-primary critical-btn" onClick={startRest}><Droplets size={17} /> {t.forceBreak}</button>
+            <button className="btn-text warning-text" onClick={acceptOrder}>{t.ignoreRisk}</button>
           </div>
         )}
 
         <div className="rider-safety-actions">
-          {status === "ACTIVE" && <button className="request-rest-btn" onClick={startRest}><Coffee size={16} /> Request a safe break</button>}
-          <button className="emergency-btn" onClick={() => showToast("🚨 Emergency services alerted!")}>
-            <Siren size={17} /> Emergency
+          {status === "ACTIVE" && <button className="request-rest-btn" onClick={startRest}><Coffee size={16} /> {t.requestBreak}</button>}
+          <button className="emergency-btn" onClick={() => showToast(t.emergencyAlert)}>
+            <Siren size={17} /> {t.emergency}
           </button>
         </div>
       </div>

@@ -2,11 +2,11 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: radial-gradient(circle at 8% 0%, #ddf3e7 0, transparent 28rem), #f4f8f5; }
 .rider-app-shell { display:grid; min-height:100vh; place-items:center; }
-.rider-view .rider-screen { height: max(480px, calc(100vh - 150px)); }
+.rider-view .rider-screen { height: clamp(520px, calc(100dvh - 180px), 850px); }
 @media (max-width: 720px) {
 	.app-shell .app-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
 	.app-shell .app-nav button { justify-content: center; }
-	.rider-view .rider-screen { height: max(480px, calc(100vh - 190px)); }
+	.rider-view .rider-screen { height: max(500px, calc(100dvh - 230px)); }
 }
 button, input, select { font: inherit; }
 button { cursor: pointer; }

@@ -4,7 +4,7 @@ import { Rider } from "./Rider";
 import { DispatchMap } from "./DispatchMap";
 import { LiveComparison } from "./LiveComparison";
 import { Reports } from "./Reports";
-import type { Language } from "./i18n";
+import type { Language, RiderLanguage } from "./i18n";
 import type { DispatchMapData } from "./types";
 import "./styles.css";
 import "./DispatchMap.css";
@@ -26,6 +26,7 @@ const readPage = (): Page => {
 
 export const App = () => {
   const [language, setLanguage] = useState<Language>("en");
+  const [riderLanguage, setRiderLanguage] = useState<RiderLanguage>("en");
   const [page, setPage] = useState<Page>(readPage);
   const [selectedRiderId, setSelectedRiderId] = useState("PB-102");
   const [mapData, setMapData] = useState<{ baseline: DispatchMapData; heatAware: DispatchMapData } | null>(null);
@@ -69,7 +70,7 @@ export const App = () => {
   };
 
   return (
-    <main className="app-shell" lang={language}>
+    <main className="app-shell" lang={page === "rider" ? riderLanguage : language}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark"><Flame size={21} /></div>
@@ -86,7 +87,7 @@ export const App = () => {
 
       {page === "rider" && (
         <div className="rider-view">
-          <Rider riderId={selectedRiderId} language={language} setLanguage={(value) => setLanguage(value as Language)} />
+          <Rider riderId={selectedRiderId} language={riderLanguage} setLanguage={setRiderLanguage} />
         </div>
       )}
       {page === "map" && (
