@@ -1,481 +1,313 @@
-import { AlertTriangle, Clock3, MapPin, Pause, Play, Radio, RefreshCw, Settings, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { CircleMarker, MapContainer, Polyline, Popup, Rectangle, TileLayer } from "react-leaflet";
+import { AlertTriangle, Pause, Play, RefreshCw, ShieldCheck, ThermometerSun, Wallet } from "lucide-react";
+import { useEffect, useState, useMemo } from "react";
+import { CircleMarker, MapContainer, Polyline, TileLayer, Marker } from "react-leaflet";
 import L from "leaflet";
-import type { Comparison, ComparisonSummary, DeliveryRoute, DispatchMapData } from "./types";
 import "leaflet/dist/leaflet.css";
 import "./LiveComparison.css";
 
-type Mode = "BASELINE" | "HEAT_AWARE";
-const startTime = new Date("2026-05-01T05:30:00Z").getTime();
-const endTime   = startTime + 16 * 60 * 60 * 1000;
-const warningDose = 80;
-const puneCenter: [number, number] = [18.527, 73.86];
-const canvasRenderer = L.canvas({ padding: 0.5 });
+// ─── fix Leaflet default icon ──────────────────────────────────────────────
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl:       "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl:     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
 
-const doseColor  = (dose: number) => dose >= warningDose ? "#cf5543" : dose >= 50 ? "#d99543" : "#16805f";
-const completedAt= (r: DeliveryRoute, t: number) => new Date(r.completedAt).getTime() < t;
+const restIcon = L.divIcon({
+  className: "",
+  html: `<div style="width:28px;height:28px;background:#1a73e8;color:#fff;border-radius:50%;display:grid;place-items:center;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:14px;">☕</div>`,
+  iconSize: [28,28],
+  iconAnchor: [14,14]
+});
 
-const riderDosesAt = (assignments: Comparison["baseline"]["assignments"], time: number) => {
-  const latestByRider = new Map<string, Comparison["baseline"]["assignments"][number]>();
-  for (const assignment of assignments) {
-    if (new Date(assignment.completedAt).getTime() > time) continue;
-    const previous = latestByRider.get(assignment.riderId);
-    if (!previous || new Date(assignment.completedAt).getTime() > new Date(previous.completedAt).getTime()) {
-      latestByRider.set(assignment.riderId, assignment);
+// ─── Route Helpers ────────────────────────────────────────────────────────
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const interpolateRoute = (route: [number,number][], progress: number): [number,number] => {
+  if (!route.length) return [18.5204, 73.8567];
+  const p = Math.max(0, Math.min(1, progress));
+  const seg = p * (route.length - 1);
+  const i = Math.floor(seg);
+  if (i >= route.length - 1) return route[route.length - 1];
+  const t = seg - i;
+  return [lerp(route[i][0], route[i+1][0], t), lerp(route[i][1], route[i+1][1], t)];
+};
+
+const getDrivenPath = (route: [number,number][], progress: number): [number,number][] => {
+  if (!route.length) return [];
+  const p = Math.max(0, Math.min(1, progress));
+  const seg = p * (route.length - 1);
+  const i = Math.floor(seg);
+  if (i >= route.length - 1) return route;
+  return [...route.slice(0, i + 1), interpolateRoute(route, p)];
+};
+
+// OSRM fetcher
+const fetchRoadRoute = async (from: [number,number], to: [number,number]): Promise<[number,number][]> => {
+  const url = `https://router.project-osrm.org/route/v1/driving/${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`;
+  try {
+    const res = await fetch(url);
+    const json = await res.json();
+    const coords = json.routes?.[0]?.geometry.coordinates;
+    if (coords) return coords.map(([lng, lat]: any) => [lat, lng]);
+  } catch (e) {}
+  return [from, to]; // fallback
+};
+
+const doseColor = (dose: number) => dose > 80 ? "#cf5543" : dose >= 50 ? "#d99543" : "#16805f";
+
+// Story Waypoints
+const START: [number,number] = [18.525, 73.850];
+const REST: [number,number]  = [18.515, 73.860];
+const END: [number,number]   = [18.505, 73.855];
+
+// ─── Individual Map Component ─────────────────────────────────────────────
+const SingleSimMap = ({
+  mode, time, dose, isResting, routes
+}: {
+  mode: "BASELINE"|"HEATBUDGET"; time: number; dose: number; isResting: boolean;
+  routes: { base: [number,number][], leg1: [number,number][], leg2: [number,number][] };
+}) => {
+  const isB = mode === "BASELINE";
+  
+  let pos: [number,number] = START;
+  let drawnPath: [number,number][] = [];
+  let fullPath: [number,number][] = [];
+
+  if (isB) {
+    fullPath = routes.base;
+    const p = time / 1000;
+    pos = interpolateRoute(routes.base, p);
+    drawnPath = getDrivenPath(routes.base, p);
+  } else {
+    fullPath = [...routes.leg1, ...routes.leg2];
+    if (time < 450) {
+      const p = time / 450;
+      pos = interpolateRoute(routes.leg1, p);
+      drawnPath = getDrivenPath(routes.leg1, p);
+    } else if (time < 650) {
+      pos = REST;
+      drawnPath = routes.leg1;
+    } else {
+      const p = (time - 650) / 350;
+      pos = interpolateRoute(routes.leg2, p);
+      drawnPath = [...routes.leg1, ...getDrivenPath(routes.leg2, p)];
     }
   }
-  return new Map([...latestByRider].map(([riderId, assignment]) => [riderId, assignment.doseAfter]));
-};
-
-const ridersEverAtWarning = (assignments: Comparison["baseline"]["assignments"]) => {
-  const maximumDoseByRider = new Map<string, number>();
-  for (const assignment of assignments) {
-    maximumDoseByRider.set(assignment.riderId, Math.max(maximumDoseByRider.get(assignment.riderId) ?? 0, assignment.doseAfter));
-  }
-  return [...maximumDoseByRider.values()].filter(dose => dose >= warningDose).length;
-};
-
-const getTemp = (time: number) => {
-  const hour = (new Date(time).getUTCHours() + 5.5) % 24;
-  if (hour < 9 || hour >= 20) return 25;
-  if (hour < 11 || hour >= 17) return 29;
-  return 34;
-};
-
-const SimMap = memo(({ mode, data, selectRider,
-}: {
-  mode: Mode; data: DispatchMapData;
-  selectRider: (id: string) => void;
-}) => {
-  const isBaseline = mode === "BASELINE";
-  const wbgt       = getTemp(startTime);
-  const heatColor  = wbgt >= 40 ? "#df7850" : wbgt >= 35 ? "#e6b44f" : "#76b994";
-  const hasOsmSource = data.restPointStatus === "LIVE_OSM" || data.restPointStatus === "STALE_OSM";
-  const restCandidates = hasOsmSource ? data.restPoints : [];
-  const wards: [[number,number],[number,number]][] = [
-    [[18.45,73.73],[18.53,73.82]], [[18.45,73.82],[18.53,73.91]],
-    [[18.45,73.91],[18.53,74]],    [[18.53,73.73],[18.61,73.82]],
-    [[18.53,73.82],[18.61,73.91]], [[18.53,73.91],[18.61,74]],
-  ];
-
-  const latestByRider   = new Map<string, DeliveryRoute>();
-  data.deliveries.forEach(r => latestByRider.set(r.riderId, r));
-  const visibleRiders = data.riders.slice(0, 50);
-  const restLabel       = mode !== "HEAT_AWARE" ? "No heat-aware intervention"
-    : !hasOsmSource ? "OSM candidates unavailable"
-      : `${restCandidates.length} ${data.restPointStatus === "STALE_OSM" ? "cached " : ""}OSM candidates · unverified`;
-
+  
   return (
-    <article className={`sim-map-card ${isBaseline ? "baseline-card" : "heatbudget-card"}`}>
-      {/* colour-coded header tells the story immediately */}
-      <header className={isBaseline ? "map-header-baseline" : "map-header-heatbudget"}>
+    <article className={`sim-map-card ${isB ? "baseline-card" : "heatbudget-card"}`}>
+      <header className={isB ? "map-header-baseline" : "map-header-heatbudget"}>
         <div className="map-header-left">
-          {isBaseline
-            ? <><AlertTriangle size={15}/> <span>Baseline — Nearest Rider</span></>
-            : <><ShieldCheck   size={15}/> <span>Pause Pay — Heat-Aware Scoring</span></>}
+          {isB ? <><AlertTriangle size={15}/> <span>Baseline — No Protection</span></>
+               : <><ShieldCheck size={15}/> <span>HeatBudget — AI Active</span></>}
         </div>
         <div className="map-header-right">
-          <span className={isBaseline ? "danger-badge" : "safe-badge"}>
-            {isBaseline ? "Nearest-rider strategy" : restLabel}
-          </span>
-          <span className="wbgt-pill">{wbgt.toFixed(1)}°C</span>
+          <span className="wbgt-pill">{isResting ? "Resting" : "Delivering"}</span>
         </div>
       </header>
 
-      <div style={{ position: "relative" }}>
-        <MapContainer center={puneCenter} zoom={12} className="sim-map" scrollWheelZoom attributionControl={false}>
+      <div style={{ position: "relative", height: "100%" }}>
+        <MapContainer center={[18.515, 73.855]} zoom={14} className="sim-map" scrollWheelZoom={false} attributionControl={false} dragging={false} doubleClickZoom={false} zoomControl={false}>
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          
+          {/* Path preview */}
+          {fullPath.length > 0 && <Polyline positions={fullPath} pathOptions={{ color: "#e0e0e0", weight: 4, dashArray: "5 5" }} />}
+          
+          {/* Path driven so far */}
+          {drawnPath.length > 0 && <Polyline positions={drawnPath} pathOptions={{ color: isB ? "#8897a3" : (dose > 80 ? "#cf5543" : "#16805f"), weight: 5 }} />}
 
-          {/* heat-zone ward overlays */}
-          {wards.map((b, i) =>
-            <Rectangle key={i} bounds={b} pathOptions={{ color: "transparent", fillColor: heatColor, fillOpacity: 0.12 + i * 0.02 }} />
+          {/* Rest stop (Only show for HeatBudget) */}
+          {!isB && <Marker position={REST} icon={restIcon} />}
+
+          {/* Rider */}
+          <CircleMarker center={pos} radius={isResting ? 0 : 8} pathOptions={{ color: "#fff", fillColor: doseColor(dose), fillOpacity: 1, weight: 2 }} />
+          
+          {isResting && (
+             <Marker position={REST} icon={L.divIcon({
+               className: "",
+               html: `<div style="background:#16805f;color:white;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:bold;white-space:nowrap;transform:translate(-50%, -35px);box-shadow:0 2px 5px rgba(0,0,0,0.2);">☕ Resting & Earning</div>`,
+               iconSize: [0,0]
+             })} />
           )}
-
-          {/* ── BASELINE: direct routes (gray), no intervention ── */}
-          {isBaseline && data.deliveries.map(r =>
-            <Polyline key={r.orderId}
-              positions={[[r.pickup.latitude, r.pickup.longitude],[r.dropoff.latitude, r.dropoff.longitude]]}
-              pathOptions={{ color: "#8897a3", weight: 2.5, opacity: 0.55, dashArray: "4 4" }}
-            />
-          )}
-
-          {/* Route lines show the generated pickup-to-dropoff assignment, not street geometry. */}
-          {!isBaseline && data.deliveries.map(r => {
-            const rider = data.riders.find(rd => rd.riderId === r.riderId);
-            const col   = rider && rider.dose >= 80 ? "#cf5543" : "#16805f";
-            return (
-              <Polyline key={r.orderId}
-                positions={[[r.pickup.latitude, r.pickup.longitude],[r.dropoff.latitude, r.dropoff.longitude]]}
-                pathOptions={{ color: col, weight: 3.5, opacity: 0.88 }}
-              />
-            );
-          })}
-
-          {/* ── HEATBUDGET only: rest point markers ── */}
-          {!isBaseline && restCandidates.map(p =>
-            <CircleMarker key={p.id}
-              center={[p.location.latitude, p.location.longitude]}
-              radius={8}
-              renderer={canvasRenderer}
-              pathOptions={{ color: "#0b57d0", fillColor: "#7db5ea", fillOpacity: 1, weight: 3 }}
-            >
-              <Popup><strong>{p.name}</strong><br />{p.category} · OSM candidate, not verified<br /><a href={p.osmUrl} target="_blank" rel="noreferrer">OpenStreetMap</a></Popup>
-            </CircleMarker>
-          )}
-
-          {/* rider dots — same logic both sides, judge sees colour difference */}
-          {visibleRiders.map(rider => {
-            const route  = latestByRider.get(rider.riderId);
-            const dose = rider.dose;
-            const center: [number,number] = route
-              ? [route.dropoff.latitude, route.dropoff.longitude]
-              : [rider.location.latitude, rider.location.longitude];
-            const hot    = dose >= warningDose;
-            return (
-              <CircleMarker key={rider.riderId} center={center}
-                radius={hot ? 8 : 5}
-                renderer={canvasRenderer}
-                eventHandlers={{ click: () => selectRider(rider.riderId) }}
-                pathOptions={{ color: "#fff", fillColor: doseColor(dose), fillOpacity: 0.95, weight: hot ? 2.5 : 1 }}
-              />
-            );
-          })}
         </MapContainer>
-
-        {/* colour-coded legend */}
-        <div className="map-legend">
-          <span><i style={{ background: "#16805f" }}/> Safe</span>
-          <span><i style={{ background: "#d99543" }}/> Warm</span>
-          <span><i style={{ background: "#cf5543" }}/> Danger</span>
-          {!isBaseline && <span><i style={{ background: "#1a73e8", borderRadius: 2 }}/> Rest point</span>}
-        </div>
-        {!isBaseline && <div className="rest-point-note">Blue markers are OSM-mapped candidates, not verified rider rest facilities.</div>}
       </div>
     </article>
   );
-});
-
-// ── delta pill: shows improvement direction clearly ───────────────────────────
-const DeltaPill = ({ baseline, heat, lowerIsBetter }: { baseline: number; heat: number; lowerIsBetter: boolean }) => {
-  const delta    = heat - baseline;
-  const improved = lowerIsBetter ? delta < 0 : delta > 0;
-  const pct      = baseline !== 0 ? Math.abs(delta / baseline * 100).toFixed(0) : "—";
-  if (delta === 0) return <span className="delta-pill neutral">same</span>;
-  return (
-    <span className={`delta-pill ${improved ? "better" : "worse"}`}>
-      {improved ? <TrendingDown size={12}/> : <TrendingUp size={12}/>}
-      {baseline === 0 ? `${Math.abs(delta)} ${lowerIsBetter ? (improved ? "fewer" : "more") : (improved ? "more" : "less")}` : `${pct}% ${improved ? "better" : "worse"}`}
-    </span>
-  );
 };
 
-export const LiveComparison = ({
-  language, setPage, setSelectedRiderId,
-}: {
-  language: "en" | "hi"; setPage: (p: "compare" | "rider" | "reports" | "map") => void; setSelectedRiderId: (id: string) => void;
-}) => {
-  const [seed,          setSeed]          = useState("440026");
-  const [speed,         setSpeed]         = useState(60);
-  const [playing,       setPlaying]       = useState(false);
-  const [loading,       setLoading]       = useState(true);
-  const [time,          setTime]          = useState(startTime);
-  const [baseline,      setBaseline]      = useState<DispatchMapData | null>(null);
-  const [heatAware,     setHeatAware]     = useState<DispatchMapData | null>(null);
-  const [comparison,    setComparison]    = useState<Comparison | null>(null);
-  const [error,         setError]         = useState<string | null>(null);
-  const [streamStatus,  setStreamStatus]  = useState<"connecting" | "connected" | "disconnected">("connecting");
-  const [lastUpdated,   setLastUpdated]   = useState<string | null>(null);
-  const [showScenario,  setShowScenario]  = useState(false);
-  const [handledActions,setHandledActions]= useState<Record<string, "break" | "keep">>({});
-  const [actionNotice,  setActionNotice]  = useState<string | null>(null);
-  const timeRef = useRef(time);
-  timeRef.current = time;
 
-  const reset = async () => {
-    const parsedSeed = Number(seed);
-    if (!Number.isSafeInteger(parsedSeed) || parsedSeed < 0) {
-      setError("Enter a non-negative whole-number seed.");
-      return;
-    }
-    setError(null); setLoading(true); setPlaying(false); setTime(startTime); setHandledActions({}); setActionNotice(null);
-    try {
-      const [br, hr, cr] = await Promise.all([
-        fetch(`/api/v1/dispatch/map?seed=${parsedSeed}&mode=BASELINE&limit=100`),
-        fetch(`/api/v1/dispatch/map?seed=${parsedSeed}&mode=HEAT_AWARE&limit=100`),
-        fetch(`/api/v1/dispatch/compare?seed=${parsedSeed}`, { method: "POST" }),
-      ]);
-      if (![br,hr,cr].every(r => r.ok)) throw new Error("The dispatch API could not load this comparison.");
-      setBaseline(await br.json() as DispatchMapData);
-      setHeatAware(await hr.json() as DispatchMapData);
-      setComparison(await cr.json() as Comparison);
-      setLastUpdated(new Date().toISOString());
-    } catch (e) { setError(e instanceof Error ? e.message : "The dispatch API could not load this comparison."); }
-    finally { setLoading(false); }
-  };
+// ─── Main View ────────────────────────────────────────────────────────────
+export const LiveComparison = () => {
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0); // 0 to 1000 ticks
+  
+  const [routes, setRoutes] = useState<{base: [number,number][], leg1: [number,number][], leg2: [number,number][]}>({
+    base: [START, END], leg1: [START, REST], leg2: [REST, END]
+  });
 
-  useEffect(() => { void reset(); }, []);
+  // Fetch true OSRM road routes on mount
   useEffect(() => {
-    const stream = new EventSource("/api/v1/dispatch/events");
-    stream.addEventListener("connected", () => setStreamStatus("connected"));
-    stream.addEventListener("dispatch-comparison", (event) => {
-      try {
-        const update = JSON.parse((event as MessageEvent<string>).data) as ComparisonSummary;
-        setComparison(current => current ? {
-          baseline: { ...current.baseline, seed: update.seed, metrics: update.baseline },
-          heatAware: { ...current.heatAware, seed: update.seed, metrics: update.heatAware },
-        } : current);
-        setLastUpdated(update.generatedAt);
-        setStreamStatus("connected");
-      } catch {
-        setStreamStatus("disconnected");
-      }
+    Promise.all([
+      fetchRoadRoute(START, END),
+      fetchRoadRoute(START, REST),
+      fetchRoadRoute(REST, END)
+    ]).then(([base, leg1, leg2]) => {
+      setRoutes({ base, leg1, leg2 });
     });
-    stream.onerror = () => setStreamStatus("disconnected");
-    return () => stream.close();
   }, []);
+
+  // Clock loop
   useEffect(() => {
     if (!playing) return;
-    const startedAt = Date.now();
-    const startSimulationAt = timeRef.current;
-    const replayDuration = endTime - startTime;
-    const id = window.setInterval(() => {
-      const simulatedElapsed = (Date.now() - startedAt) / 700 * speed * 60_000;
-      const position = (startSimulationAt - startTime + simulatedElapsed) % replayDuration;
-      setTime(startTime + position);
-    }, 250);
-    return () => window.clearInterval(id);
-  }, [playing, speed]);
+    const id = setInterval(() => {
+      setTime(t => (t >= 1000 ? 0 : t + 2));
+    }, 60);
+    return () => clearInterval(id);
+  }, [playing]);
 
-  const doneBaseline  = baseline?.deliveries.filter(r  => completedAt(r, time)) ?? [];
-  const doneHeat      = heatAware?.deliveries.filter(r => completedAt(r, time)) ?? [];
-  const hasOsmSource = heatAware?.restPointStatus === "LIVE_OSM" || heatAware?.restPointStatus === "STALE_OSM";
-  const restCandidates = hasOsmSource ? heatAware?.restPoints ?? [] : [];
-  const baselineDoseAt = comparison ? riderDosesAt(comparison.baseline.assignments, time) : new Map<string, number>();
-  const heatDoseAt = comparison ? riderDosesAt(comparison.heatAware.assignments, time) : new Map<string, number>();
-  const overBaseline = [...baselineDoseAt.values()].filter(dose => dose >= warningDose).length;
-  const overHeat = [...heatDoseAt.values()].filter(dose => dose >= warningDose).length;
-  const baselinePeak = comparison ? ridersEverAtWarning(comparison.baseline.assignments) : 0;
-  const heatPeak = comparison ? ridersEverAtWarning(comparison.heatAware.assignments) : 0;
-  const events        = doneHeat.slice(-5).reverse();
-  const timeLabel     = new Date(time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
-  const hasStarted    = time > startTime;
+  const hasStarted = time > 0;
 
-  const bEarn  = comparison?.baseline.metrics.deliveryEarnings ?? 0;
-  const hEarn  = comparison?.heatAware.metrics.deliveryEarnings ?? 0;
-  const bLate  = comparison?.baseline.metrics.completedOrders
-    ? comparison.baseline.metrics.lateDeliveries / comparison.baseline.metrics.completedOrders * 100 : 0;
-  const hLate  = comparison?.heatAware.metrics.completedOrders
-    ? comparison.heatAware.metrics.lateDeliveries / comparison.heatAware.metrics.completedOrders * 100 : 0;
-  const timeline = Array.from({ length: 17 }, (_, hour) => {
-    const checkpoint = startTime + hour * 60 * 60 * 1000;
-    return {
-      label: new Date(checkpoint).toLocaleTimeString("en-IN", { hour: "2-digit", timeZone: "Asia/Kolkata" }),
-      baseline: baseline?.deliveries.filter(route => new Date(route.completedAt).getTime() <= checkpoint).length ?? 0,
-      heatAware: heatAware?.deliveries.filter(route => new Date(route.completedAt).getTime() <= checkpoint).length ?? 0,
-    };
-  });
-  const maxTimeline = Math.max(1, ...timeline.flatMap(point => [point.baseline, point.heatAware]));
-  const timelinePoints = (key: "baseline" | "heatAware") => timeline.map((point, index) =>
-    `${(index / (timeline.length - 1)) * 400},${90 - point[key] / maxTimeline * 78}`
-  ).join(" ");
-  const interventionQueue = (heatAware?.deliveries ?? [])
-    .filter(route => route.doseAfter >= 80 || route.heatLimitOverride)
-    .sort((a, b) => b.doseAfter - a.doseAfter)
-    .slice(0, 4);
-  const takeAction = (route: DeliveryRoute, action: "break" | "keep") => {
-    setHandledActions(current => ({ ...current, [route.orderId]: action }));
-    setActionNotice(action === "break"
-      ? `Demo rest request recorded for rider ${route.riderId.slice(0, 6)}. No notification was sent.`
-      : `Demo review recorded for order ${route.orderId.slice(0, 6)}. No dispatch action was sent.`);
-  };
-  const selectRider = useCallback((id: string) => {
-    setSelectedRiderId(id);
-    setPage("rider");
-  }, [setPage, setSelectedRiderId]);
+  // ── Baseline Math ──
+  const bDose = Math.min(100, (time / 1000) * 115); 
+  const bOrders = Math.floor(time / 200);
+  const bEarnings = bOrders * 45;
+  const bStatus = bDose >= 100 ? "Critical Heatstroke Risk" : "Delivering";
+
+  // ── HeatBudget Math ──
+  let hDose = (time / 1000) * 90; 
+  let hOrders = Math.floor(time / 200); 
+  let pausePay = 0;
+  let hStatus = "Delivering";
+  let isResting = false;
+
+  if (time >= 450 && time < 650) {
+      isResting = true;
+      hStatus = "Resting (Pause Pay Active)";
+      const restProgress = (time - 450) / 200; 
+      hDose = 40.5 - (30 * restProgress); 
+      pausePay = Math.floor(restProgress * 40); 
+      hOrders = 2; 
+  } else if (time >= 650) {
+      hStatus = "Delivering";
+      hDose = 10.5 + ((time - 650) / 1000) * 90;
+      pausePay = 40;
+      hOrders = 2 + Math.floor((time - 650) / 200);
+  }
+  const hEarnings = hOrders * 45;
+  const hTotalEarnings = hEarnings + pausePay;
+
+  const realTime = new Date(new Date("2026-05-01T12:00:00").getTime() + (time / 1000) * 4 * 60 * 60 * 1000);
+  const timeLabel = realTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+
+  const events = [];
+  if (time > 50)  events.unshift({ msg: "Both riders start their shift.", type: "neutral" });
+  if (time > 200) events.unshift({ msg: "Order 1 completed. Heat increasing.", type: "neutral" });
+  if (time > 400) events.unshift({ msg: "Baseline rider approaching dangerous heat levels.", type: "danger" });
+  if (time > 450) events.unshift({ msg: "HeatBudget AI intercepts! Rider diverted to rest point for 20 mins.", type: "safe" });
+  if (time > 500) events.unshift({ msg: "HeatBudget rider earning ₹40 Pause Pay while resting in shade.", type: "safe" });
+  if (time > 650) events.unshift({ msg: "HeatBudget rider fully recovered. Resuming deliveries.", type: "safe" });
+  if (time > 850) events.unshift({ msg: "Baseline rider hits 100% critical heat dose. Medical risk high.", type: "danger" });
+  if (time >= 990) events.unshift({ msg: "Shift ended.", type: "neutral" });
 
   return (
     <section className="live-comparison">
-      {/* ── toolbar ── */}
       <div className="top-bar-new">
         <div className="title-area">
-          <h2>Seeded dispatch replay</h2>
-          <p className="subtitle-note">Pune · Spring Boot dispatch results · Seed {seed}{lastUpdated ? ` · Updated ${new Date(lastUpdated).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })}` : ""}</p>
+          <h2>Rider Journey Comparison</h2>
+          <p className="subtitle-note">Focusing on a single rider's 4-hour afternoon shift in Pune (12 PM - 4 PM).</p>
         </div>
         <div className="clock-bar-new">
-          <button onClick={() => setPlaying(v => !v)} className="play-btn" disabled={loading || !baseline || !heatAware}>
+          <button onClick={() => setPlaying(v => !v)} className="play-btn">
             {playing ? <Pause size={16}/> : <Play size={16} fill="currentColor"/>}
-            {playing ? "Pause replay" : "Replay API results"}
+            {playing ? "Pause" : "Play Sim"}
           </button>
-          <button onClick={() => { void reset(); }} className="rerun-btn" disabled={loading}>
-            <RefreshCw size={15} className={loading ? "refresh-spinning" : ""} />
-            {loading ? "Running API comparison…" : "Run comparison"}
+          <button onClick={() => setTime(0)} className="scenario-btn">
+            <RefreshCw size={14}/> Reset
           </button>
-          <div className="speed-ctrls">
-            {[1,10,60].map(v => <button key={v} className={speed===v?"active":""} onClick={()=>setSpeed(v)}>{v}×</button>)}
-          </div>
           <strong className="clock-time">{timeLabel}</strong>
-          <span className="temp-chip">Simulated WBGT {getTemp(time)}°C</span>
-          <span className={`stream-status ${streamStatus}`}><i /> API stream {streamStatus}</span>
-          <div className="scenario-popover-container">
-            <button className="scenario-btn" onClick={() => setShowScenario(s => !s)}>
-              <Settings size={15}/> Seed
-            </button>
-            {showScenario && (
-              <div className="scenario-popover">
-                <label>Scenario seed<input inputMode="numeric" value={seed} onChange={e => setSeed(e.target.value)}/></label>
-                <button onClick={() => { void reset(); setShowScenario(false); }}>Load seed</button>
-              </div>
-            )}
-          </div>
+          <span className="temp-chip">🌡 42.0°C Peak</span>
         </div>
       </div>
 
-      {/* ── hero metrics ── */}
       <div className="hero-strip">
         <div className="hero-metric">
-          <span className="metric-label">🔴 Riders at 80% warning dose · replay time</span>
+          <span className="metric-label"><ThermometerSun size={14} style={{verticalAlign:"middle", marginRight:4}}/> Heat Dose</span>
           <div className="hero-metric-values">
             <div className="b-val">
               <small>Baseline</small>
-              <strong>{comparison ? overBaseline : "—"}</strong>
+              <strong style={{color: doseColor(bDose)}}>{Math.round(bDose)}%</strong>
             </div>
             <div className="h-val">
-              <small>Pause Pay</small>
-              <strong>{comparison ? overHeat : "—"}</strong>
+              <small>HeatBudget</small>
+              <strong style={{color: doseColor(hDose)}}>{Math.round(hDose)}%</strong>
             </div>
           </div>
-          {comparison && <DeltaPill baseline={overBaseline} heat={overHeat} lowerIsBetter/>}
-          <p className="risk-metric-note">Current count follows replay time. Peak this run: Baseline {baselinePeak} · Pause Pay {heatPeak}</p>
         </div>
 
         <div className="hero-metric">
-          <span className="metric-label">💰 Delivery earnings · full run</span>
+          <span className="metric-label"><Wallet size={14} style={{verticalAlign:"middle", marginRight:4}}/> Total Earnings</span>
           <div className="hero-metric-values">
-            <div className="b-val"><small>Baseline total</small><strong>{comparison ? `₹${Math.round(bEarn).toLocaleString("en-IN")}` : "—"}</strong></div>
-            <div className="h-val"><small>Pause Pay total</small><strong>{comparison ? `₹${Math.round(hEarn).toLocaleString("en-IN")}` : "—"}</strong></div>
+            <div className="b-val"><small>Baseline</small><strong>₹{bEarnings}</strong></div>
+            <div className="h-val"><small>HeatBudget (Inc. Pause Pay)</small><strong style={{color:"#16805f"}}>₹{hTotalEarnings}</strong></div>
           </div>
-          {comparison && <DeltaPill baseline={bEarn} heat={hEarn} lowerIsBetter={false}/>}
         </div>
 
         <div className="hero-metric">
-          <span className="metric-label">⏰ Late deliveries</span>
+          <span className="metric-label"><ShieldCheck size={14} style={{verticalAlign:"middle", marginRight:4}}/> Status</span>
           <div className="hero-metric-values">
-              <div className="b-val"><small>Baseline</small><strong>{comparison ? `${bLate.toFixed(1)}%` : "—"}</strong></div>
-              <div className="h-val"><small>Pause Pay</small><strong>{comparison ? `${hLate.toFixed(1)}%` : "—"}</strong></div>
+            <div className="b-val"><small>Baseline</small><strong style={{fontSize:16, color: bDose >= 100 ? "#cf5543" : "#596b7f", marginTop:4}}>{bStatus}</strong></div>
+            <div className="h-val"><small>HeatBudget</small><strong style={{fontSize:16, color: isResting ? "#1a73e8" : "#16805f", marginTop:4}}>{hStatus}</strong></div>
           </div>
-            {comparison && <DeltaPill baseline={bLate} heat={hLate} lowerIsBetter/>}
         </div>
       </div>
 
-      {/* ── pre-play explainer (only shown before play) ── */}
-      {!hasStarted && (
-        <div className="explainer-strip">
-          <div className="explainer-item baseline-ex">
-            <AlertTriangle size={16}/> <strong>Baseline:</strong> Direct nearest-rider assignments from the API; no heat-aware intervention.
-          </div>
-          <div className="explainer-item heatbudget-ex">
-            <ShieldCheck size={16}/> <strong>Pause Pay:</strong> API assignments scored against estimated heat dose, with pause credits and soft-limit tracking.
+      <div className="dual-map" style={{ gridTemplateColumns: "1fr 1fr", height: "400px", marginBottom: "20px" }}>
+        <SingleSimMap mode="BASELINE" time={time} dose={bDose} isResting={false} routes={routes} />
+        <SingleSimMap mode="HEATBUDGET" time={time} dose={hDose} isResting={isResting} routes={routes} />
+      </div>
+
+      <div className="live-bottom">
+        <div className="chart-area">
+          <p>Rider Heat Dose Over Shift (12 PM - 4 PM)</p>
+          <svg viewBox="0 0 500 120" className="main-svg-chart" style={{ height: 160 }}>
+            <line x1="30" y1="10" x2="480" y2="10" stroke="#f0f0f0" strokeWidth="1"/>
+            <line x1="30" y1="60" x2="480" y2="60" stroke="#f0f0f0" strokeWidth="1"/>
+            <line x1="30" y1="110" x2="480" y2="110" stroke="#eee" strokeWidth="1"/>
+            <text x="25" y="14" fontSize="10" fill="#bbb" textAnchor="end">100%</text>
+            <text x="25" y="64" fontSize="10" fill="#bbb" textAnchor="end">50%</text>
+            <text x="25" y="114" fontSize="10" fill="#bbb" textAnchor="end">0%</text>
+            
+            <rect x="30" y="10" width="450" height="20" fill="#cf5543" opacity="0.05" />
+
+            <polyline 
+              points={`30,110 ${30 + (time/1000)*450},${Math.max(10, 110 - bDose)}`}
+              fill="none" stroke="#8897a3" strokeWidth="3" strokeLinecap="round" strokeDasharray="6 6"/>
+            
+            <path d={`M 30 110 
+              ${time > 450 ? `L ${30 + 450/1000*450} ${110 - 40.5}` : `L ${30 + (time/1000)*450} ${110 - hDose}`}
+              ${time > 650 ? `L ${30 + 650/1000*450} ${110 - 10.5}` : (time > 450 ? `L ${30 + (time/1000)*450} ${110 - hDose}` : '')}
+              ${time > 650 ? `L ${30 + (time/1000)*450} ${110 - hDose}` : ''}
+            `} fill="none" stroke="#16805f" strokeWidth="3" strokeLinecap="round" />
+            
+            {hasStarted && <circle cx={30 + (time/1000)*450} cy={Math.max(10, 110 - bDose)} r="4" fill="#8897a3" />}
+            {hasStarted && <circle cx={30 + (time/1000)*450} cy={110 - hDose} r="4" fill="#16805f" />}
+          </svg>
+          <div className="chart-legend" style={{ marginTop: 12 }}>
+            <span style={{color:"#8897a3"}}>— Baseline (Straight to Heatstroke)</span>
+            <span style={{color:"#16805f"}}>— HeatBudget (Intervenes & Cools Down)</span>
           </div>
         </div>
-      )}
 
-      {error && <p className="error">{error}</p>}
-
-      {heatAware && (
-        <section className="operations-board" aria-label="Live dispatch actions">
-          <div className="operations-heading">
-            <div>
-              <p className="eyebrow"><Radio size={13}/> SEEDED API SIMULATION</p>
-              <h3>Replay-derived intervention review</h3>
-              <p>Flagged routes come from the first 100 API assignments. Review actions below stay in this browser demo and do not contact riders.</p>
-            </div>
-            <span className={`sync-status ${streamStatus}`}><span/> Comparison stream: {streamStatus}</span>
-          </div>
-          {actionNotice && <div className="action-notice">{actionNotice}</div>}
-          <div className="operations-grid">
-            <div className="intervention-queue">
-              <div className="panel-title"><strong>Flagged in replay preview</strong><span>{interventionQueue.length} flagged</span></div>
-              {interventionQueue.length ? interventionQueue.map(route => {
-                const action = handledActions[route.orderId];
-                return <article className={action ? "queue-row handled" : "queue-row"} key={route.orderId}>
-                  <div className="risk-score">{Math.round(route.doseAfter)}<small>dose</small></div>
-                  <div className="queue-copy">
-                    <strong>Rider {route.riderId.slice(0, 6)} · Order {route.orderId.slice(0, 6)}</strong>
-                    <span><Clock3 size={12}/> {Math.round(route.deliveryFee)} min value · heat limit {route.heatLimitOverride ? "overridden" : "reached"}</span>
-                  </div>
-                  {action ? <span className={`action-state ${action}`}>{action === "break" ? "Break sent" : "Reviewed"}</span> : <div className="queue-actions">
-                    <button className="send-break" onClick={() => takeAction(route, "break")}>Record demo rest request</button>
-                    <button className="keep-assignment" onClick={() => takeAction(route, "keep")}>Mark reviewed</button>
-                  </div>}
-                </article>;
-              }) : <p className="queue-empty">No riders are above the intervention threshold.</p>}
-            </div>
-            <aside className="hub-roster">
-              <div className="panel-title"><strong>OSM candidates · not verified</strong><span>{!hasOsmSource ? "unavailable" : heatAware.restPointStatus === "STALE_OSM" ? "cached" : `${restCandidates.length} mapped`}</span></div>
-              {restCandidates.map(point => <div className="hub-row" key={point.id}>
-                <MapPin size={14}/><span><strong>{point.name}</strong><small>{point.category} · <a href={point.osmUrl} target="_blank" rel="noreferrer">OpenStreetMap</a></small></span>
-              </div>)}
-              {!restCandidates.length && <p className="queue-empty">No mapped candidate points available right now. These locations are not verified rider facilities.</p>}
-            </aside>
-          </div>
-        </section>
-      )}
-
-      {baseline && heatAware && comparison ? (
-        <>
-          {/* ── dual maps ── */}
-          <div className="dual-map">
-            <SimMap mode="BASELINE" data={baseline} selectRider={selectRider} />
-            <SimMap mode="HEAT_AWARE" data={heatAware} selectRider={selectRider} />
-          </div>
-
-          {/* ── map key below maps ── */}
-          <div className="map-key-row">
-            <span><i style={{background:"#8897a3", display:"inline-block", width:20, height:3, borderRadius:2, verticalAlign:"middle"}}/> Baseline direct route</span>
-            <span><i style={{background:"#16805f", display:"inline-block", width:20, height:3, borderRadius:2, verticalAlign:"middle"}}/> Pause Pay assignment</span>
-            <span>Lines are straight assignment previews, not road routes.</span>
-            <span>Maps show API route samples and 50 rider markers. Warning counts and charts follow the replay clock.</span>
-          </div>
-
-          {/* ── bottom: chart + event feed ── */}
-          <div className="live-bottom">
-            <div className="chart-area">
-              <p>Cumulative completed assignments · API map preview (up to 100 per strategy)</p>
-              <svg viewBox="0 0 400 100" className="main-svg-chart" role="img" aria-label="Cumulative completed assignments by hour, calculated from API route timestamps">
-                <line x1="0" y1="90" x2="400" y2="90" stroke="#e5ece8" strokeWidth="1"/>
-                <line x1="0" y1="51" x2="400" y2="51" stroke="#e5ece8" strokeWidth="1" strokeDasharray="3 4"/>
-                <line x1="0" y1="12" x2="400" y2="12" stroke="#e5ece8" strokeWidth="1" strokeDasharray="3 4"/>
-                <polyline points={timelinePoints("baseline")} fill="none" stroke="#596b7f" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                <polyline points={timelinePoints("heatAware")} fill="none" stroke="#16805f" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                {timeline.filter((_, index) => index % 4 === 0).map((point, index) => <text key={point.label} x={index * 100} y="99" fontSize="8" fill="#70847b">{point.label}</text>)}
-              </svg>
-              <div className="chart-legend">
-                <span style={{color:"#596b7f"}}>— Baseline completed</span>
-                <span style={{color:"#16805f"}}>— Pause Pay completed</span>
-              </div>
-              <p className="chart-footnote">Playback time: {timeLabel} · {doneBaseline.length} baseline and {doneHeat.length} Pause Pay routes completed in the visible preview.</p>
-            </div>
-
-            <aside className="event-feed">
-              <p className="eyebrow">REPLAY EVENTS</p>
-              {hasStarted
-                ? events.map(r => (
-                    <p key={r.orderId} className={r.doseAfter >= 80 ? "event-danger" : "event-ok"}>
-                      <i/>
-                      {r.doseAfter >= 80
-                        ? `Rider #${r.riderId.slice(0,5)} reached ${Math.round(r.doseAfter)}% dose in the API result.`
-                        : `Order #${r.orderId.slice(0,5)} completed at ${new Date(r.completedAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })}.`}
-                    </p>
-                  ))
-                : <p className="event-idle">Start replay to inspect timestamped API assignments.</p>
-              }
-            </aside>
-          </div>
-        </>
-      ) : (
-        <div className="map-loading">Loading simulation data…</div>
-      )}
+        <aside className="event-feed">
+          <p className="eyebrow">STORY LOG</p>
+          {events.length > 0 ? events.map((ev, i) => (
+            <p key={i} className={ev.type === "danger" ? "event-danger" : ev.type === "safe" ? "event-ok" : ""}>
+              <i style={{ background: ev.type === "danger" ? "#cf5543" : ev.type === "safe" ? "#16805f" : "#bbb" }}/>
+              {ev.msg}
+            </p>
+          )) : <p className="event-idle">Press Play Sim to begin the story.</p>}
+        </aside>
+      </div>
     </section>
   );
 };
