@@ -1,62 +1,84 @@
-# Pause Pay
+# HeatBudget
+Algorithm-Driven Heat Protection & "Pause Pay" for Delivery Fleets
 
-**Rest without losing a rupee.**
+## Problem Statement
+Delivery riders in Indian cities work 10-12 hours outdoors, even at 44°C+, and are paid per delivery, so every minute of rest is unpaid. Platforms reward afternoon availability and penalize cancellations, which makes breaks costly. 
 
-Heat-fair dispatch engine for delivery riders in Pune.
+Heat alerts only report the temperature. They do not track how much heat each rider has absorbed over a shift, and nothing in dispatch accounts for it. Heat safety rules (Maharashtra SOPs, Karnataka's 2025 gig worker Act) exist, but there is no tool to apply or verify them.
 
-## Phase 1: local foundation
+## Objective
+Build a dispatch layer that treats heat as a budget:
+1. Track each rider's cumulative heat dose during a shift.
+2. Assign orders and routes to reduce total heat exposure while keeping earnings and delivery times close to normal.
+3. Guide riders to shaded waiting spots and rest points, with a pause credit so rest doesn't cost income.
+4. Alert fleet managers when a rider reaches their limit or presses SOS.
+5. Generate aggregate compliance reports for platforms and regulators.
 
-1. Copy `.env.example` to `.env` and replace local passwords.
-2. Start data services: `docker compose --env-file .env up -d`.
-3. Start the API: `mvn spring-boot:run`.
-4. Check `http://localhost:8080/actuator/health` and `http://localhost:8080/api/v1/status`.
+Success metric: fewer riders over the heat limit at similar earnings and delivery time, compared with baseline nearest‑rider dispatch on the same seeded day.
 
-## Phase 2: heat core
+## Solution Overview
+HeatBudget is a dispatch interceptor that monitors rider heat exposure. When a rider approaches critical limits, the engine reroutes them to shaded zones and calculates a financial "Pause Pay" micro‑incentive to offset lost income.
 
-- `GET /api/v1/weather/current` fetches Pune weather and returns a clearly labelled WBGT screening estimate.
-- The Open-Meteo client caches weather for 15 minutes and only falls back to an explicitly marked stale reading for up to 60 minutes.
-- `WbgtCalculator` and `DoseTracker` are backend services ready for the rider-location API in the next phase.
+![Live Comparison Simulation](./assets/comparison.png)
 
-Edge-case requirements are tracked in `EDGE_CASES.md`.
+## Key Features
+* **Rider View:** Mobile UI showing live heat dose, route shading, and nearby rest stops.  
+  <br>![Rider UI - Rest & Emergency](./assets/rider-rest.png)  
+  <br>![Rider UI - Pickup](./assets/rider-pickup.png)
+* **Dispatch Comparison:** A dual‑simulation comparing a baseline dispatch vs. a HeatBudget algorithm‑assisted dispatch.
+* **Pause Pay:** Calculates financial incentives based on time spent in a designated rest geofence.
+* **SOS Alerts:** Manual and automated emergency triggers that push medical alerts to Fleet Managers.
+* **Reports:** Dashboard generating aggregate KPI compliance reports.
 
-## Phase 3: rider tracking API
+---
 
-- `POST /api/v1/riders/shifts` starts a consented anonymous rider shift.
-- `POST /api/v1/riders/{riderId}/location` records an idempotent location ping and updates dose only when data is valid.
-- `GET /api/v1/riders/{riderId}/dose` returns the current dose and non-punitive guidance.
+## Technical Architecture & Stack
 
-## Phase 4: seeded simulator
+### 1. Frontend & Simulation (React / TypeScript)
+* **Framework:** React 18 with TypeScript, bundled via Vite.
+* **Mapping:** `react-leaflet` rendering OpenStreetMap raster tiles, with OSRM fetching real‑world road geometries.
+* **Simulation:** A 60 ms React `useEffect` animation loop that calculates `[lat, lng]` coordinates along the OSRM polyline.
+* **Fallback Strategy:** Interception layer that serves client‑side mock JSON when the backend is offline.
 
-- `GET /api/v1/sim/scenario` returns the default Pune scenario summary.
-- `GET /api/v1/sim/scenario?seed=440026` reproduces exactly the same riders and orders for both dispatch strategies.
+### 2. Cloud Integrations (Amazon Web Services)
+* **AWS Amplify:** Frontend static hosting and CDN.
+* **Amazon Location Service:** Active HTTP verification pings to authenticate API keys.
+* **Amazon SNS:** Executes a `PublishCommand` to trigger real‑time email alerts to Fleet Managers. (See Limitations regarding frontend execution).
 
-## Phase 5: dispatch comparison
+### 3. Backend (Java / Spring Boot)
+* **Framework:** Java 17 and Spring Boot 3.4.
+* **Database:** PostgreSQL with Flyway for automated schema migrations.
+* **Status:** Core REST endpoints and schema migrations are initialized in the repository.
 
-- `POST /api/v1/dispatch/compare` runs baseline and Pause Pay strategies over the same seeded scenario.
-- The response includes completed orders, late deliveries, riders over the heat limit, soft-limit overrides, earnings, pause credits, and earnings per heat point.
+---
 
-## Phase 6: live dashboard contract
+## Architecture Diagram
 
-- `GET /api/v1/dispatch/events` opens an SSE stream for dashboard updates.
-- Each `POST /api/v1/dispatch/compare` sends a `dispatch-comparison` event with aggregate baseline and Pause Pay metrics.
-- The default permitted dashboard origin is `http://localhost:5173`; set `DASHBOARD_ALLOWED_ORIGIN` for another local frontend.
+![System Architecture](./assets/architecture.png)
 
-## Phase 7: AWS integration
+```mermaid
+flowchart TD
+    classDef frontend fill:#FF9900,stroke:#232F3E,stroke-width:2px,color:#fff,font-weight:bold
+    classDef aws fill:#232F3E,stroke:#FF9900,stroke-width:2px,color:#fff
+    classDef external fill:#007799,stroke:#232F3E,stroke-width:2px,color:#fff
 
-- Optional SNS rest nudges, Bedrock compliance reports, and Secrets Manager access use the AWS SDK for Java v2.
-- AWS is disabled by default. See `AWS_SETUP.md` before enabling it in an IAM-enabled deployment.
-- Build the deployable container with `docker build -t heatbudget .`.
+    subgraph Client [Client Architecture]
+        AMP["AWS Amplify<br>(Production Hosting)"]:::aws
+        UI["React Application<br>(Dashboard & Rider UI)"]:::frontend
+        SIM["Simulation Engine<br>(Client-side state)"]:::frontend
+    end
 
-## Phase 8: React dashboard
+    subgraph AWS Cloud [AWS Cloud Services]
+        ALS["Amazon Location Service<br>(API Authentication)"]:::aws
+        SNS["Amazon SNS<br>(Emergency Email Alerts)"]:::aws
+    end
 
-1. In `frontend`, run `npm install`.
-2. Start the Spring API on port `8080` and run `npm run dev` in `frontend`.
-3. Open the local Vite address (normally `http://localhost:5173`).
+    subgraph External [Open Source Integrations]
+        OSM["OpenStreetMap / OSRM<br>(Raster Tiles & Road Routing)"]:::external
+    end
 
-The dashboard is a clean light UI with English/Hindi switching, a seeded comparison control, live SSE updates, Rider Safety, and Compliance Report screens.
-
-`GET /api/v1/dispatch/map?seed=440026&mode=HEAT_AWARE` supplies simulated riders and routes plus cached OpenStreetMap candidates for benches, drinking-water points, and parks in Pune. These mapped features are not verified as rider facilities and have no asserted capacity or opening status. The response reports whether candidate data is live, stale, or unavailable; no fabricated locations are substituted. OSM data is available under the ODbL.
-
-### Run without Docker
-
-For a frontend demo when Docker/PostgreSQL/Redis are unavailable, start the API with `mvn spring-boot:run -Dspring-boot.run.profiles=demo`. This uses a temporary in-memory H2 database and listens on port `9090`; it does not preserve rider data after the process stops. Set `SERVER_PORT` and `VITE_API_TARGET` together if this port is unavailable.
+    UI -->|Hosted on| AMP
+    UI <--> SIM
+    SIM <-->|Authenticates API Key| ALS
+    SIM -->|Publishes SDK Command| SNS
+    SIM <-->|Fetches Route Coordinates| OSM
