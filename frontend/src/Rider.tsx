@@ -119,12 +119,40 @@ const SmoothCamera = ({ center }: { center: [number,number] }) => {
     const target = center;
     const tick = () => {
       current.current = lerpPt(current.current, target, 0.08);
-      map.panTo(current.current, { animate: false });
+      const zoom = map.getZoom();
+      const visibleCenter = map.unproject(
+        map.project(current.current, zoom).add([0, map.getSize().y * 0.12]),
+        zoom,
+      );
+      map.panTo(visibleCenter, { animate: false });
       raf.current = requestAnimationFrame(tick);
     };
     raf.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf.current);
   }, [map, center]);
+
+  return null;
+};
+
+const ObserveMapSize = () => {
+  const map = useMap();
+
+  useEffect(() => {
+    let frame = 0;
+    const invalidateSize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => map.invalidateSize({ pan: false }));
+    };
+    const observer = new ResizeObserver(invalidateSize);
+    observer.observe(map.getContainer());
+    window.addEventListener("resize", invalidateSize);
+    invalidateSize();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", invalidateSize);
+    };
+  }, [map]);
 
   return null;
 };
@@ -176,6 +204,8 @@ export const Rider = ({
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [scanMessage, setScanMessage] = useState("");
   const [scannedHubId, setScannedHubId] = useState<string | null>(null);
+  const [mapLayout, setMapLayout] = useState("initial");
+  const mapContainerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const scanCompletedRef = useRef(false);
@@ -184,6 +214,8 @@ export const Rider = ({
   const [pickupRoad,  setPickupRoad]  = useState<[number,number][]>([]);
   const [dropoffRoad, setDropoffRoad] = useState<[number,number][]>([]);
   const [restRoad,    setRestRoad]    = useState<[number,number][]>([]);
+  const [restOrigin, setRestOrigin] = useState<[number,number] | null>(null);
+  const [restDestinationId, setRestDestinationId] = useState<number | null>(null);
 
   // deterministic rider base location
   const idHash = useMemo(() =>
@@ -191,6 +223,18 @@ export const Rider = ({
   [riderId]);
   const baseLat = 18.5204 + (idHash % 100 - 50) / 4000;
   const baseLng = 73.8567 + ((idHash * 3) % 100 - 50) / 4000;
+
+  useEffect(() => {
+    const container = mapContainerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      const nextLayout = `${Math.round(width)}x${Math.round(height)}`;
+      setMapLayout(current => current === nextLayout ? current : nextLayout);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   // order waypoints (deterministic per orderSeed)
   const { pickupPt, dropoffPt, customerPt, restaurantName, orderNum, restPlace } = useMemo(() => {
@@ -213,8 +257,6 @@ export const Rider = ({
       restPlace:      rPlace,
     };
   }, [idHash, orderSeed, baseLat, baseLng]);
-  const expectedHubId = useMemo(() => hubCodeFor(restPlace), [restPlace]);
-
   // rest + helper place markers
   const places = useMemo(() => {
     const s = idHash + orderSeed;
@@ -225,6 +267,9 @@ export const Rider = ({
       { id: 3, type: "shade", lat: baseLat - off(s * 19), lng: baseLng + off(s * 23), name: "Banyan Tree Shade", time: "1 min", credit: 10 },
     ];
   }, [idHash, orderSeed, baseLat, baseLng, restPlace]);
+  const activeRestPlace = places.find(place => place.id === restDestinationId) ?? places[0];
+  const activeRestName = activeRestPlace.name;
+  const expectedHubId = useMemo(() => hubCodeFor(activeRestName), [activeRestName]);
 
   // ── fetch REAL road routes whenever order changes ─────────────────────────
   useEffect(() => {
@@ -234,29 +279,37 @@ export const Rider = ({
     setDropoffRoad([]);
     setRestRoad([]);
 
-    const restPoint: [number,number] = [places[0].lat, places[0].lng];
-
     Promise.all([
       fetchRoadRoute(pickupPt,  dropoffPt),
       fetchRoadRoute(dropoffPt, customerPt),
-      fetchRoadRoute(pickupPt,  restPoint),
-    ]).then(([pr, dr, rr]) => {
+    ]).then(([pr, dr]) => {
       if (cancelled) return;
       setPickupRoad(pr.length  ? pr : [pickupPt,  dropoffPt]);   // fallback to straight line if OSRM fails
       setDropoffRoad(dr.length ? dr : [dropoffPt, customerPt]);
-      setRestRoad(rr.length    ? rr : [pickupPt,  restPoint]);
       setRouteLoading(false);
     }).catch(() => {
       if (cancelled) return;
       // graceful fallback to straight lines
       setPickupRoad([pickupPt,  dropoffPt]);
       setDropoffRoad([dropoffPt, customerPt]);
-      setRestRoad([pickupPt,    [places[0].lat, places[0].lng]]);
       setRouteLoading(false);
     });
 
     return () => { cancelled = true; };
   }, [orderSeed, pickupPt, dropoffPt, customerPt, places]);
+
+  useEffect(() => {
+    if (status !== "RESTING" || !restOrigin || !activeRestPlace) return;
+    let cancelled = false;
+    const destination: [number, number] = [activeRestPlace.lat, activeRestPlace.lng];
+    setRestRoad([restOrigin, destination]);
+    void fetchRoadRoute(restOrigin, destination).then(route => {
+      if (!cancelled && route.length) setRestRoad(route);
+    }).catch(() => {
+      if (!cancelled) setRestRoad([restOrigin, destination]);
+    });
+    return () => { cancelled = true; };
+  }, [status, restOrigin, activeRestPlace]);
 
   // current road path being driven
   const activeRoad =
@@ -310,7 +363,21 @@ export const Rider = ({
     setOrderSeed(s => s + 1);
     showToast(`₹45 ${t.earned}`);
   };
-  const startRest = () => { setStatus("RESTING"); setTask("IDLE"); setProgress(0); setRestCheckedIn(false); showToast(`${t.restShared}: ${restPlace}`); };
+  const startRest = () => {
+    const nearestPlace = places.reduce((nearest, place) => {
+      const distance = (place.lat - riderPos[0]) ** 2 + (place.lng - riderPos[1]) ** 2;
+      const nearestDistance = (nearest.lat - riderPos[0]) ** 2 + (nearest.lng - riderPos[1]) ** 2;
+      return distance < nearestDistance ? place : nearest;
+    });
+    setRestOrigin(riderPos);
+    setRestDestinationId(nearestPlace.id);
+    setRestRoad([riderPos, [nearestPlace.lat, nearestPlace.lng]]);
+    setStatus("RESTING");
+    setTask("IDLE");
+    setProgress(0);
+    setRestCheckedIn(false);
+    showToast(`${t.restShared}: ${nearestPlace.name}`);
+  };
   const checkInAtRest = useCallback((hubId: string) => {
     setScannedHubId(hubId);
     setRestCheckedIn(true);
@@ -417,9 +484,9 @@ export const Rider = ({
       )}
 
       {/* ── full-bleed map ── */}
-      <div className="rider-map-container">
+      <div className="rider-map-container" ref={mapContainerRef}>
         <MapContainer
-          key={`${baseLat.toFixed(5)}-${baseLng.toFixed(5)}`}
+          key={`${baseLat.toFixed(5)}-${baseLng.toFixed(5)}-${mapLayout}`}
           center={riderPos}
           zoom={14}
           zoomControl
@@ -428,6 +495,7 @@ export const Rider = ({
           attributionControl={false}
         >
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <ObserveMapSize />
           <SmoothCamera center={riderPos} />
 
           {/* real road route polyline */}
@@ -497,13 +565,13 @@ export const Rider = ({
 
         ) : status === "RESTING" ? (
           <div className="card-state">
-            <h3>{t.restingAt} {restPlace}</h3>
+            <h3>{t.restingAt} {activeRestName}</h3>
             {restCheckedIn ? <>
               <p><Droplets size={15} /> {t.checkinVerified} · {scannedHubId} · {Math.floor(restTimer / 60)}:{String(restTimer % 60).padStart(2, "0")} {t.left}</p>
               <div className="progress-bar"><div style={{ width: `${Math.max(0, (300 - restTimer) / 300 * 100)}%`, background: doseColor }} /></div>
               <button className="btn-secondary" style={{ marginTop: 12 }} onClick={() => { setStatus("ACTIVE"); setRestTimer(300); }}>{t.goOnline}</button>
             </> : <>
-              <p><MapPin size={15} /> {t.followRoute} <strong>{restPlace}</strong>. {t.qrAtHub}</p>
+              <p><MapPin size={15} /> {t.followRoute} <strong>{activeRestName}</strong>. {t.qrAtHub}</p>
               <button className="btn-primary nav-btn" onClick={openQrScanner}><QrCode size={17} /> {t.atHub}</button>
               <button className="btn-secondary" style={{ marginTop: 10 }} onClick={() => setStatus("ACTIVE")}>{t.cannotReach}</button>
             </>}
